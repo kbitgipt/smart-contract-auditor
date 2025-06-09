@@ -33,8 +33,10 @@ dist/
 # Uploads and reports
 backend/uploads/*
 backend/reports/*
+backend/extracted/*
 !backend/uploads/.gitkeep
 !backend/reports/.gitkeep
+!backend/extracted/.gitkeep
 
 # IDE
 .vscode/
