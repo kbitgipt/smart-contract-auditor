@@ -4,13 +4,17 @@ import Login from './components/auth/Login';
 import Register from './components/auth/Register';
 import ModeSwitcher from './components/common/ModeSwitcher';
 import FileUpload from './components/upload/FileUpload';
+import ProjectsPage from './components/projects/ProjectsPage';
 import useAuthStore from './stores/authStore';
+// import AnalysisManager from './components/projects/AnalysisManager';
+// import ProjectDetail from './components/projects/ProjectDetail';
+// import SourceCodeViewer from './components/projects/SourceCodeViewer';
 import './App.css';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [authMode, setAuthMode] = useState('login'); 
-  const [selectedProject, setSelectedProject] = useState(null);
+  // const [selectedProject, setSelectedProject] = useState(null);
   
   const { user, isAuthenticated, logout, initializeAuth } = useAuthStore();
 
@@ -26,8 +30,9 @@ function App() {
     setAuthMode(prev => prev === 'login' ? 'register' : 'login');
   };
 
+  // Navigation handlers
   const navigateToUpload = () => setCurrentPage('upload');
-  const navigateToReports = () => setCurrentPage('reports');
+  const navigateToProjects = () => setCurrentPage('projects');
   const navigateToDashboard = () => setCurrentPage('dashboard');
 
   // Show authentication if not logged in
@@ -40,13 +45,20 @@ function App() {
   const renderPage = () => {
     switch(currentPage) {
       case 'upload':
-        return <UploadPage user={user} />;
-      case 'reports':
-        return <ReportsPage user={user} />;
+        return <UploadPage user={user} onNavigateToProjects={navigateToProjects} />;
+      case 'projects':
+        return <ProjectsPage />
       case 'profile':
         return <ProfilePage user={user} />;
       default:
-        return <DashboardPage user={user} />;
+        // return <DashboardPage user={user} />;
+        return (
+          <DashboardPage 
+            user={user} 
+            onNavigateToUpload={navigateToUpload}
+            onNavigateToProjects={navigateToProjects}
+          />
+        );
     }
   };
 
@@ -75,10 +87,10 @@ function App() {
                 Upload
               </button>
               <button 
-                onClick={() => setCurrentPage('reports')}
-                className={`px-3 py-2 rounded-md ${currentPage === 'reports' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:text-gray-900'}`}
+                onClick={() => setCurrentPage('projects')}
+                className={`px-3 py-2 rounded-md ${currentPage === 'projects' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:text-gray-900'}`}
               >
-                Reports
+                Projects
               </button>
               
               {/* Mode Switcher */}
@@ -124,8 +136,8 @@ function App() {
   );
 }
 
-// Mode-aware Dashboard
-function DashboardPage({ user }) {
+// Dashboard with navigation handlers
+function DashboardPage({ user, onNavigateToUpload, onNavigateToProjects }) {
   const isAuditorMode = user?.user_mode === 'auditor';
 
   return (
@@ -154,7 +166,11 @@ function DashboardPage({ user }) {
       
       {/* Common Features */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-        <div className="card hover:shadow-lg transition-shadow cursor-pointer">
+        <div 
+          className="card hover:shadow-lg transition-shadow cursor-pointer"
+          onClick={onNavigateToUpload}
+        >
+
           <div className="flex items-center">
             <Upload className="h-8 w-8 text-blue-500 mr-3" />
             <div>
@@ -164,12 +180,15 @@ function DashboardPage({ user }) {
           </div>
         </div>
         
-        <div className="card hover:shadow-lg transition-shadow cursor-pointer">
+        <div 
+          className="card hover:shadow-lg transition-shadow cursor-pointer"
+          onClick={onNavigateToProjects}
+        >
           <div className="flex items-center">
             <FileText className="h-8 w-8 text-green-500 mr-3" />
             <div>
-              <h3 className="text-lg font-semibold">View Reports</h3>
-              <p className="text-gray-600">Check your audit reports</p>
+              <h3 className="text-lg font-semibold">View Projects</h3>
+              <p className="text-gray-600">Check your audit projects</p>
             </div>
           </div>
         </div>
@@ -224,7 +243,7 @@ function DashboardPage({ user }) {
   );
 }
 
-function UploadPage({ user }) {
+function UploadPage({ user, onNavigateToProjects }) {
   const isAuditorMode = user?.user_mode === 'auditor';
 
   return (
@@ -240,18 +259,7 @@ function UploadPage({ user }) {
         </div>
       )}
       
-      <FileUpload />
-    </div>
-  );
-}
-
-function ReportsPage({ user }) {
-  return (
-    <div>
-      <h2 className="text-3xl font-bold text-gray-900 mb-6">Audit Reports</h2>
-      <div className="card">
-        <p className="text-gray-600">No reports available yet. Upload a contract to get started!</p>
-      </div>
+      <FileUpload onNavigateToReports={onNavigateToProjects} />
     </div>
   );
 }
@@ -286,238 +294,5 @@ function ProfilePage({ user }) {
   );
 }
 
-function ProjectList({ onSelectProject }) {
-  const [projects, setProjects] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const { token } = useAuthStore();
-
-  useEffect(() => {
-    fetchProjects();
-  }, []);
-
-  const fetchProjects = async () => {
-    try {
-      const response = await fetch('/api/upload/projects', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data);
-      }
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="card">
-        <div className="animate-pulse">
-          <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
-          <div className="space-y-3">
-            <div className="h-4 bg-gray-200 rounded"></div>
-            <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (projects.length === 0) {
-    return (
-      <div className="card">
-        <p className="text-gray-600">No projects available yet. Upload a contract to get started!</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {projects.map(project => (
-        <div key={project.id} className="card hover:shadow-lg transition-shadow cursor-pointer" onClick={() => onSelectProject(project)}>
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">{project.name}</h3>
-              <p className="text-sm text-gray-600">{project.original_filename}</p>
-              <p className="text-xs text-gray-500">
-                Created: {new Date(project.created_at).toLocaleDateString()}
-              </p>
-            </div>
-            <div className="text-right">
-              <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${
-                project.status === 'completed' ? 'bg-green-100 text-green-800' :
-                project.status === 'processing' ? 'bg-yellow-100 text-yellow-800' :
-                project.status === 'failed' ? 'bg-red-100 text-red-800' :
-                'bg-gray-100 text-gray-800'
-              }`}>
-                {project.status}
-              </span>
-              <p className="text-xs text-gray-500 mt-1">
-                {(project.file_size / 1024).toFixed(1)} KB
-              </p>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Project Detail Component
-function ProjectDetail({ project, onBack }) {
-  const [analyses, setAnalyses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const { token } = useAuthStore();
-
-  useEffect(() => {
-    fetchAnalyses();
-  }, [project.id]);
-
-  const fetchAnalyses = async () => {
-    try {
-      const response = await fetch(`/api/analysis/project/${project.id}/analyses`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setAnalyses(data);
-      }
-    } catch (error) {
-      console.error('Error fetching analyses:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const viewReport = async (analysisId) => {
-    try {
-      const response = await fetch(`/api/analysis/analysis/${analysisId}/report`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const htmlContent = await response.text();
-        // Open in new window
-        const newWindow = window.open();
-        newWindow.document.write(htmlContent);
-      }
-    } catch (error) {
-      console.error('Error viewing report:', error);
-    }
-  };
-
-  return (
-    <div>
-      <button onClick={onBack} className="mb-4 text-blue-600 hover:text-blue-800">
-        ← Back to Projects
-      </button>
-
-      <div className="card mb-6">
-        <h3 className="text-xl font-semibold text-gray-900 mb-4">{project.name}</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-          <div>
-            <span className="font-medium text-gray-700">File:</span>
-            <p>{project.original_filename}</p>
-          </div>
-          <div>
-            <span className="font-medium text-gray-700">Size:</span>
-            <p>{(project.file_size / 1024).toFixed(1)} KB</p>
-          </div>
-          <div>
-            <span className="font-medium text-gray-700">Type:</span>
-            <p>{project.project_type}</p>
-          </div>
-          <div>
-            <span className="font-medium text-gray-700">Status:</span>
-            <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${
-              project.status === 'completed' ? 'bg-green-100 text-green-800' :
-              project.status === 'processing' ? 'bg-yellow-100 text-yellow-800' :
-              project.status === 'failed' ? 'bg-red-100 text-red-800' :
-              'bg-gray-100 text-gray-800'
-            }`}>
-              {project.status}
-            </span>
-          </div>
-        </div>
-        {project.description && (
-          <div className="mt-4">
-            <span className="font-medium text-gray-700">Description:</span>
-            <p className="text-gray-600">{project.description}</p>
-          </div>
-        )}
-      </div>
-
-      <h4 className="text-lg font-semibold text-gray-900 mb-4">Analysis Reports</h4>
-      
-      {loading ? (
-        <div className="card">
-          <div className="animate-pulse">
-            <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
-            <div className="space-y-3">
-              <div className="h-4 bg-gray-200 rounded"></div>
-              <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-            </div>
-          </div>
-        </div>
-      ) : analyses.length === 0 ? (
-        <div className="card">
-          <p className="text-gray-600">No analysis reports available for this project.</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {analyses.map(analysis => (
-            <div key={analysis.id} className="card">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h5 className="font-semibold text-gray-900">
-                    Analysis Report
-                  </h5>
-                  <p className="text-sm text-gray-600">
-                    {analysis.summary.total} issues found
-                    {analysis.completed_at && ` • ${new Date(analysis.completed_at).toLocaleDateString()}`}
-                  </p>
-                  <div className="flex space-x-4 mt-2 text-xs">
-                    <span className="text-red-600">High: {analysis.summary.high}</span>
-                    <span className="text-orange-600">Medium: {analysis.summary.medium}</span>
-                    <span className="text-yellow-600">Low: {analysis.summary.low}</span>
-                    <span className="text-blue-600">Info: {analysis.summary.informational}</span>
-                  </div>
-                </div>
-                <div className="flex space-x-2">
-                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                    analysis.status === 'completed' ? 'bg-green-100 text-green-800' :
-                    analysis.status === 'running' ? 'bg-yellow-100 text-yellow-800' :
-                    analysis.status === 'failed' ? 'bg-red-100 text-red-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {analysis.status}
-                  </span>
-                  {analysis.status === 'completed' && analysis.report_available && (
-                    <button
-                      onClick={() => viewReport(analysis.id)}
-                      className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
-                    >
-                      View Report
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default App;

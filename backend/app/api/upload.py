@@ -1,14 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from typing import Optional, List
-from pathlib import Path
-from datetime import datetime
+from typing import Optional
 from app.models.user import User
 from app.models.project import Project, ProjectType, ProjectStatus
-from app.schemas.project import ProjectCreate, UploadResponse, ProjectResponse
+from app.schemas.project import UploadResponse, ProjectResponse
 from app.services.file_service import FileService
 from app.api.auth import get_current_user_dependency
 
-router = APIRouter()
+router = APIRouter(tags=["Upload"])
 
 @router.post("/", response_model=UploadResponse)
 async def upload_file(
@@ -44,7 +42,8 @@ async def upload_file(
             original_filename=file.filename,
             file_path=str(file_path),
             file_size=file_size,
-            file_hash=file_hash
+            file_hash=file_hash,
+            analysis_path=str(analysis_path),
         )
         
         print("Inserting project to database...")
@@ -62,6 +61,7 @@ async def upload_file(
                 original_filename=project.original_filename,
                 file_size=project.file_size,
                 analysis_id=project.analysis_id,
+                analysis_path=project.analysis_path,
                 created_at=project.created_at,
                 updated_at=project.updated_at
             ),
@@ -81,84 +81,3 @@ async def upload_file(
             detail=f"Upload failed: {str(e)}"
         )
 
-@router.get("/projects", response_model=List[ProjectResponse])
-async def get_user_projects(
-    current_user: User = Depends(get_current_user_dependency)
-):
-    """Get all projects for current user"""
-    projects = await Project.find(Project.user_id == str(current_user.id)).to_list()
-    
-    return [
-        ProjectResponse(
-            id=str(project.id),
-            name=project.name,
-            description=project.description,
-            user_id=project.user_id,
-            project_type=project.project_type,
-            status=project.status,
-            original_filename=project.original_filename,
-            file_size=project.file_size,
-            analysis_id=project.analysis_id,
-            created_at=project.created_at,
-            updated_at=project.updated_at
-        )
-        for project in projects
-    ]
-
-@router.get("/projects/{project_id}", response_model=ProjectResponse)
-async def get_project(
-    project_id: str,
-    current_user: User = Depends(get_current_user_dependency)
-):
-    """Get specific project"""
-    project = await Project.get(project_id)
-    
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Check ownership
-    if project.user_id != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    return ProjectResponse(
-        id=str(project.id),
-        name=project.name,
-        description=project.description,
-        user_id=project.user_id,
-        project_type=project.project_type,
-        status=project.status,
-        original_filename=project.original_filename,
-        file_size=project.file_size,
-        analysis_id=project.analysis_id,
-        created_at=project.created_at,
-        updated_at=project.updated_at
-    )
-
-@router.delete("/projects/{project_id}")
-async def delete_project(
-    project_id: str,
-    current_user: User = Depends(get_current_user_dependency)
-):
-    """Delete project and associated files"""
-    project = await Project.get(project_id)
-    
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Check ownership
-    if project.user_id != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Delete files
-    try:
-        file_path = Path(project.file_path)
-        if file_path.exists():
-            file_path.unlink()
-    except Exception as e:
-        # Log error but don't fail the deletion
-        print(f"Error deleting file: {e}")
-    
-    # Delete project record
-    await project.delete()
-    
-    return {"message": "Project deleted successfully"}

@@ -24,27 +24,41 @@ services:
     environment:
       - MONGODB_URL=mongodb://mongodb:27017
       - DATABASE_NAME=auditsmart
+      - PYTHONPATH=/app
+      - PATH=/root/.foundry/bin:/root/.cargo/bin:/usr/local/bin:/usr/bin:/bin
     depends_on:
       - mongodb
     volumes:
       - ./backend:/app
       - ./backend/uploads:/app/uploads
       - ./backend/reports:/app/reports
+      - ./backend/extracted:/app/extracted
+      # Mount để cache Foundry và dependencies
+      - foundry_cache:/root/.foundry
+      - cargo_cache:/root/.cargo
     networks:
       - auditsmart-network
+
   frontend:
     build: ./frontend
     container_name: auditsmart-frontend
     restart: unless-stopped
     ports:
       - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
     depends_on:
       - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # Prevent overwriting node_modules
     networks:
       - auditsmart-network
 
 volumes:
   mongodb_data:
+  foundry_cache:
+  cargo_cache:
 
 networks:
   auditsmart-network:

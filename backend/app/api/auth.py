@@ -5,7 +5,6 @@ from app.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserMod
 from app.services.auth_service import AuthService
 from app.core.security import verify_token
 from app.models.user import User
-from typing import Optional
 
 router = APIRouter()
 

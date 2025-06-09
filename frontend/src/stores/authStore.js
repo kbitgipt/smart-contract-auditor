@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 // Configuration
-const API_BASE_URL = import.meta.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = import.meta.env.REACT_APP_API_URL || 'http://localhost:9000/api';
 
 const useAuthStore = create(
   persist(
@@ -217,4 +217,5 @@ const useAuthStore = create(
   )
 );
 
+export { useAuthStore }; // Named export
 export default useAuthStore;

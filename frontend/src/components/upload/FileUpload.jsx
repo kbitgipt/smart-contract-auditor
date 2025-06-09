@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Upload, FileText, AlertCircle, CheckCircle, X, Zap, Download, Eye } from 'lucide-react';
 import useAuthStore from '../../stores/authStore';
+import ProjectService from '../../services/projectService';
 
 const FileUpload = ({ user, onNavigateToReports }) => {
   const [dragActive, setDragActive] = useState(false);
@@ -21,7 +22,7 @@ const FileUpload = ({ user, onNavigateToReports }) => {
 
   // Supported Solidity versions for single file upload
   const SUPPORTED_SOLC_VERSIONS = [
-    "^0.8.0", "^0.8.21", "^0.8.22", "^0.8.23", "0.8.24", "0.8.25", "0.8.26"
+    "^0.8.0", "^0.8.20", "^0.8.21", "0.8.26"
   ];
 
   const handleDrag = (e) => {
@@ -55,9 +56,9 @@ const FileUpload = ({ user, onNavigateToReports }) => {
       return;
     }
 
-    // Validate file size (50MB)
-    if (file.size > 50 * 1024 * 1024) {
-      setError('File size must be less than 50MB');
+    // Validate file size (100MB)
+    if (file.size > 100 * 1024 * 1024) {
+      setError('File size must be less than 100MB');
       return;
     }
 
@@ -155,32 +156,36 @@ const FileUpload = ({ user, onNavigateToReports }) => {
     }
   };
 
-// Start Auto Analysis
-  const startAnalysis = async () => {
+  // Use ProjectService to Start Auto Analysis
+  const startAnalysisWithService = async () => {
     if (!uploadSuccess?.project?.id) return;
 
     setAnalyzing(true);
     setError(null);
 
     try {
-      const response = await fetch(`/api/analysis/analyze/${uploadSuccess.project.id}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Analysis failed');
+      // Use ProjectService for consistency
+      const result = await ProjectService.performAutoAnalysis(uploadSuccess.project.id, token);
+      
+      if (result && result.id) {
+        const analysisData = result.ai_analysis || result;
+        
+        setAnalysisResult({
+          id: result.id,
+          summary: analysisData.summary || {
+            total: 0, high: 0, medium: 0, low: 0, informational: 0
+          },
+          vulnerabilities: analysisData.vulnerabilities || [],
+          ai_recommendations: analysisData.ai_recommendations || [],
+          report_available: result.report_available || false
+        });
+      } else {
+        throw new Error('Invalid analysis result format');
       }
 
-      const result = await response.json();
-      setAnalysisResult(result);
-
     } catch (error) {
-      console.error('Analysis error:', error);
-      setError(error.message);
+      console.error('❌ Analysis error:', error);
+      setError(`Analysis failed: ${error.message}`);
     } finally {
       setAnalyzing(false);
     }
@@ -188,50 +193,74 @@ const FileUpload = ({ user, onNavigateToReports }) => {
 
   // Download Report
   const downloadReport = async () => {
-    if (!analysisResult?.id) return;
+    if (!analysisResult?.id) {
+      setError('No analysis result available for download');
+      return;
+    }
 
     try {
-      const response = await fetch(`/api/analysis/analysis/${analysisResult.id}/report`, {
+      const response = await fetch(`/api/analysis/${analysisResult.id}/report`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
 
-      if (response.ok) {
-        const htmlContent = await response.text();
-        const blob = new Blob([htmlContent], { type: 'text/html' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `analysis-report-${uploadSuccess.project.name}.html`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('Report not found. The report may not have been generated yet.');
+        }
+        throw new Error(`Failed to download report: ${response.status}`);
       }
+      const htmlContent = await response.text();
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis-report-${uploadSuccess.project.name}.html`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
     } catch (error) {
       console.error('Download error:', error);
+      setError(`Download failed: ${error.message}`);
     }
   };
 
   // View Report
   const viewReport = async () => {
-    if (!analysisResult?.id) return;
+    if (!analysisResult?.id) {
+      setError('No analysis result available to view');
+      return;
+    }
 
     try {
-      const response = await fetch(`/api/analysis/analysis/${analysisResult.id}/report`, {
+      const response = await fetch(`/api/analysis/${analysisResult.id}/report`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
 
-      if (response.ok) {
-        const htmlContent = await response.text();
-        const newWindow = window.open();
-        newWindow.document.write(htmlContent);
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('Report not found. The report may not have been generated yet.');
+        }
+        throw new Error(`Failed to view report: ${response.status}`);
       }
+
+      const htmlContent = await response.text();
+      const newWindow = window.open('', '_blank');
+      
+      if (!newWindow) {
+        throw new Error('Popup blocked. Please allow popups to view the report.');
+      }
+      
+      newWindow.document.write(htmlContent);
+      newWindow.document.close();
     } catch (error) {
       console.error('View report error:', error);
+      setError(`Failed to view report: ${error.message}`);
     }
   };
 
@@ -281,7 +310,8 @@ const FileUpload = ({ user, onNavigateToReports }) => {
           </div>
           
           {/* ANALYSIS SECTION FOR NORMAL USERS */}
-          {isNormalUser && uploadSuccess.project.project_type === 'single_file' && (
+          {/* {isNormalUser && uploadSuccess.project.project_type === 'single_file' && ( */}
+          {isNormalUser && (
             <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-4">
               <h4 className="font-medium text-blue-900 mb-2 flex items-center">
                 <Zap className="h-4 w-4 mr-2" />
@@ -291,22 +321,46 @@ const FileUpload = ({ user, onNavigateToReports }) => {
               {!analysisResult ? (
                 <div>
                   <p className="text-blue-700 text-sm mb-3">
-                    Your contract is ready for automatic security analysis. This will check for common vulnerabilities and provide detailed recommendations.
+                    {uploadSuccess.project.project_type === 'single_file' 
+                      ? 'Your contract is ready for automatic security analysis. This will check for common vulnerabilities and provide detailed recommendations.'
+                      : uploadSuccess.project.project_type === 'foundry_project'
+                      ? 'Your Foundry project is ready for automatic analysis. The system will analyze all source files and provide comprehensive security insights.'
+                      : 'Your project is ready for automatic security analysis.'
+                    }   
                   </p>
+                  <div className="bg-blue-100 rounded px-3 py-2 mb-3">
+                    <div className="text-xs text-blue-800">
+                      <div><strong>Project Type:</strong> {uploadSuccess.project.project_type}</div>
+                      <div><strong>File:</strong> {uploadSuccess.project.original_filename}</div>
+                      <div><strong>Size:</strong> {(uploadSuccess.project.file_size / 1024).toFixed(1)} KB</div>
+                      {uploadSuccess.project.project_type === 'foundry_project' && (
+                        <div className="mt-1 text-blue-600">
+                          <strong>Note:</strong> Foundry projects will be automatically configured for optimal analysis
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   <button
-                    onClick={startAnalysis}
+                    onClick={startAnalysisWithService}
                     disabled={analyzing}
                     className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
                     {analyzing ? (
                       <>
                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        Analyzing Contract...
+                        {uploadSuccess.project.project_type === 'foundry_project' 
+                          ? 'Analyzing Foundry Project...' 
+                          : 'Analyzing Contract...'
+                        }
                       </>
                     ) : (
                       <>
                         <Zap className="h-4 w-4" />
-                        Start Auto Analysis
+                        {uploadSuccess.project.project_type === 'foundry_project' 
+                          ? 'Start Foundry Auto Analysis' 
+                          : 'Start Auto Analysis'
+                        }
                       </>
                     )}
                   </button>
@@ -334,6 +388,17 @@ const FileUpload = ({ user, onNavigateToReports }) => {
                     <div className="bg-blue-100 text-blue-800 p-2 rounded text-center">
                       <div className="font-bold">{analysisResult.summary.informational}</div>
                       <div>Info</div>
+                    </div>
+                  </div>
+
+                  {/* ✅ ADD: Analysis type indicator */}
+                  <div className="bg-green-100 rounded px-3 py-2 mb-3">
+                    <div className="text-xs text-green-800">
+                      <div><strong>Analysis Type:</strong> {uploadSuccess.project.project_type === 'foundry_project' ? 'Foundry Project Analysis' : 'Single File Analysis'}</div>
+                      <div><strong>Analysis ID:</strong> {analysisResult.id.slice(-8)}</div>
+                      {analysisResult.ai_recommendations && analysisResult.ai_recommendations.length > 0 && (
+                        <div><strong>AI Recommendations:</strong> {analysisResult.ai_recommendations.length} insights provided</div>
+                      )}
                     </div>
                   </div>
 
@@ -378,28 +443,9 @@ const FileUpload = ({ user, onNavigateToReports }) => {
               onClick={onNavigateToReports}
               className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700"
             >
-              View All Reports
+              View Projects
             </button>
           </div>
-
-
-          {/* <div className="mt-4 space-x-3">
-            <button
-              onClick={() => setUploadSuccess(null)}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
-            >
-              Upload Another File
-            </button>
-            <button
-              onClick={() => {
-                // Navigate to project view hoặc analysis
-                console.log('View project:', uploadSuccess.project.id);
-              }}
-              className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700"
-            >
-              View Project
-            </button>
-          </div> */}
         </div>
       </div>
     );
@@ -489,7 +535,7 @@ const FileUpload = ({ user, onNavigateToReports }) => {
                 Drop your file here
               </p>
               <p className="text-sm text-gray-600 mb-4">
-                Supports .sol files and .zip archives (max 50MB)
+                Supports .sol files and .zip archives (max 100MB)
                 {isNormalUser && (
                   <span>
                     <br />

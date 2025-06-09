@@ -7,6 +7,7 @@ from enum import Enum
 class ProjectType(str, Enum):
     SINGLE_FILE = "single_file"
     FOUNDRY_PROJECT = "foundry_project"
+    MIXED_PROJECT = "mixed_project"  
 
 class ProjectStatus(str, Enum):
     UPLOADED = "uploaded"
@@ -29,7 +30,7 @@ class Project(Document):
     
     # Analysis results
     analysis_id: Optional[str] = None
-    
+    analysis_path: Optional[str] = None 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     

@@ -36,12 +36,12 @@ app.add_middleware(
 )
 
 
-from app.api import auth, upload, analysis
+from app.api import auth, upload, analysis, projects
 
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(upload.router, prefix="/api/upload", tags=["upload"])
-# app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
-app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
+app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
+app.include_router(upload.router, prefix="/api/upload", tags=["Upload"])
+app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
+app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
 
 @app.get("/")
 async def root():
