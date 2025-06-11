@@ -27,8 +27,8 @@ class AuthService:
             full_name=user_data.full_name,
             hashed_password=hashed_password, 
             mode=user_data.user_mode,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(datetime.timezone.utc)(),
+            updated_at=datetime.now(datetime.timezone.utc)(),
             # is_active=True
         )
         
@@ -62,8 +62,8 @@ class AuthService:
         #     )
         
         # Cập nhật last_login
-        user.last_login = datetime.utcnow()
-        # user.last_activity = datetime.utcnow()
+        user.last_login = datetime.now(datetime.timezone.utc)()
+        # user.last_activity = datetime.now(datetime.timezone.utc)()
         await user.save()
         
         return user

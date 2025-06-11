@@ -191,7 +191,7 @@ async def update_project(
     if description is not None:
         project.description = description
     
-    project.updated_at = datetime.utcnow()
+    project.updated_at = datetime.now(datetime.timezone.utc)()
     await project.save()
     
     return ProjectDetailResponse(

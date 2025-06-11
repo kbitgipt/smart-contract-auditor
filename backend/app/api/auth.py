@@ -35,7 +35,7 @@ async def get_current_user_dependency(credentials: HTTPAuthorizationCredentials 
             )
         
         # Update last activity (nếu cần)
-        # user.last_activity = datetime.utcnow()
+        # user.last_activity = datetime.now(datetime.timezone.utc)()
         await user.save()
         
         return user
@@ -123,7 +123,7 @@ async def update_user_mode(
     """Update user mode (normal/auditor)"""
     try:
         current_user.mode = mode_data.user_mode
-        current_user.updated_at = datetime.utcnow()
+        current_user.updated_at = datetime.now(datetime.timezone.utc)()
         
         await current_user.save()
         

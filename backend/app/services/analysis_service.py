@@ -20,8 +20,11 @@ class AnalysisService:
         """Complete analysis workflow for normal users"""
         
         # Step 1: Static Analysis
-        analysis = await self.perform_static_analysis_only(project)
-        
+        if project.project_type == ProjectType.FOUNDRY_PROJECT:
+            analysis = await self.perform_foundry_static_analysis(project)
+        else:
+            analysis = await self._perform_single_file_static_analysis(project)
+
         # Step 2: AI Enhancement (for normal users)
         try:
             analysis = await self.perform_ai_enhancement(analysis)
@@ -65,19 +68,6 @@ class AnalysisService:
             raise Exception(f"Unsupported format: {format_type}")
 
 # Static analysis handle
-    async def perform_static_analysis_only(
-        self, 
-        project: Project, 
-        slither_options: Optional[SlitherOptions] = None
-    ) -> Analysis:
-        """Perform only static analysis step for auditors"""
-        
-        # Check project type and delegate to appropriate method
-        if project.project_type == ProjectType.FOUNDRY_PROJECT:
-            return await self.perform_foundry_static_analysis(project, slither_options)
-        else:
-            # Original single file logic (keep existing code)
-            return await self._perform_single_file_static_analysis(project, slither_options)
 
     async def perform_foundry_static_analysis(
         self, 
@@ -92,7 +82,7 @@ class AnalysisService:
             user_id=project.user_id,
             analysis_type=AnalysisType.SLITHER,
             status=AnalysisStatus.RUNNING,
-            started_at=datetime.utcnow()
+            started_at=datetime.now(datetime.timezone.utc)()
         )
         await analysis.insert()
         
@@ -141,7 +131,7 @@ class AnalysisService:
                 # Update analysis with error
                 analysis.status = AnalysisStatus.FAILED
                 analysis.error_message = detailed_error
-                analysis.completed_at = datetime.utcnow()
+                analysis.completed_at = datetime.now(datetime.timezone.utc)()
                 await analysis.save()
                 
                 # Update project status
@@ -187,7 +177,7 @@ class AnalysisService:
             analysis.slither_results = slither_results
             analysis.ai_analysis = parsed_results  # parsed static results
             analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(datetime.timezone.utc)()
             await analysis.save()
             
             # Update project status
@@ -203,7 +193,7 @@ class AnalysisService:
             # Mark analysis as failed
             analysis.status = AnalysisStatus.FAILED
             analysis.error_message = str(e)
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(datetime.timezone.utc)()
             await analysis.save()
             
             # Update project status
@@ -225,7 +215,7 @@ class AnalysisService:
             user_id=project.user_id,
             analysis_type=AnalysisType.SLITHER,
             status=AnalysisStatus.RUNNING,
-            started_at=datetime.utcnow()
+            started_at=datetime.now(datetime.timezone.utc)()
         )
         await analysis.insert()
         
@@ -257,23 +247,18 @@ class AnalysisService:
             if not slither_results.get("success"):
                 error_msg = slither_results.get("error", "Unknown Slither error")
                 stderr = slither_results.get("stderr", "")
-                # stdout = slither_results.get("stdout", "")
-                
+
                 detailed_error = f"Slither analysis failed: {error_msg}"
                 if stderr:
                     detailed_error += f"\nStderr: {stderr}"
-                # if stdout:
-                #     detailed_error += f"\nStdout: {stdout}"
                 
                 print(f"❌ {detailed_error}")
                 
-                # Update analysis with error
                 analysis.status = AnalysisStatus.FAILED
                 analysis.error_message = detailed_error
-                analysis.completed_at = datetime.utcnow()
+                analysis.completed_at = datetime.now(datetime.timezone.utc)()
                 await analysis.save()
                 
-                # Update project status
                 project.status = ProjectStatus.FAILED
                 await project.save()
                 
@@ -281,8 +266,6 @@ class AnalysisService:
             
             try:
                 parsed_results = self.static_analyzer.parse_slither_results(slither_results)
-                # print(f"✅ Parsed {len(parsed_results['vulnerabilities'])} vulnerabilities")
-                
                 summary = parsed_results.get('summary', {})
                 print(f"📊 Vulnerability summary: {summary}")
             
@@ -302,7 +285,7 @@ class AnalysisService:
             analysis.slither_results = slither_results
             analysis.ai_analysis = parsed_results  # parsed static results
             analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(datetime.timezone.utc)()
             await analysis.save()
             
             # Update project status
@@ -318,7 +301,7 @@ class AnalysisService:
             # Mark analysis as failed
             analysis.status = AnalysisStatus.FAILED
             analysis.error_message = str(e)
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(datetime.timezone.utc)()
             await analysis.save()
             
             # Update project status
@@ -349,27 +332,56 @@ class AnalysisService:
             
             # Handle different project types
             if project.project_type == ProjectType.FOUNDRY_PROJECT:
-                # resolve the extracted path
-                # actual_project_path = await self._get_foundry_analysis_path(project)
-                source_code = await self._read_foundry_source_safely(project.analysis_path)
+                # For Foundry projects, use specialized AI analysis
+                project_path = Path(project.analysis_path)
+                
+                # Get project structure
+                from app.services.file_service import FileService
+                project_structure = FileService.analyze_foundry_project_structure(project_path)
+                
+                # Get main contract files
+                main_contracts = []
+                for source_file in project_structure.get("source_files", []):
+                    full_path = project_path / source_file
+                    if full_path.exists() and not any(skip in str(source_file).lower() for skip in ['test', 'mock', 'lib/']):
+                        main_contracts.append(str(full_path))
+                
+                # Use Foundry-specific AI analysis
+                ai_analysis = await self.ai_analyzer.analyze_foundry_project(
+                    project_structure, 
+                    analysis.slither_results, 
+                    main_contracts[:5],  # Limit to 5 files for token limits
+                )
             else:
+                # Single file analysis
                 source_code = await self._read_single_file_safely(project.file_path)
-            
-            # Run AI analysis with error handling
-            try:
                 ai_analysis = await self.ai_analyzer.analyze_vulnerabilities(
                     analysis.slither_results, source_code
                 )
-            except Exception as ai_error:
-                print(f"❌ AI analysis error: {ai_error}")
-                # Don't fail completely, just add error info
-                ai_analysis = {
-                    "success": False,
-                    "error": f"AI analysis failed: {str(ai_error)}",
-                    "vulnerabilities": [],
-                    "summary": {"total": 0, "high": 0, "medium": 0, "low": 0, "informational": 0},
-                    "ai_recommendations": [f"AI analysis failed: {str(ai_error)}"]
-                }
+
+            # # Handle different project types
+            # if project.project_type == ProjectType.FOUNDRY_PROJECT:
+            #     project_path = Path(project.analysis_path)
+            #     # actual_project_path = await self._get_foundry_analysis_path(project)
+            #     source_code = await self._read_foundry_source_safely(project.analysis_path)
+            # else:
+            #     source_code = await self._read_single_file_safely(project.file_path)
+            
+            # Run AI analysis with error handling
+            # try:
+            #     ai_analysis = await self.ai_analyzer.analyze_vulnerabilities(
+            #         analysis.slither_results, source_code
+            #     )
+            # except Exception as ai_error:
+            #     print(f"❌ AI analysis error: {ai_error}")
+            #     # Don't fail completely, just add error info
+            #     ai_analysis = {
+            #         "success": False,
+            #         "error": f"AI analysis failed: {str(ai_error)}",
+            #         "vulnerabilities": [],
+            #         "summary": {"total": 0, "high": 0, "medium": 0, "low": 0, "informational": 0},
+            #         "ai_recommendations": [f"AI analysis failed: {str(ai_error)}"]
+            #     }
 
             # Always proceed with results (even if AI failed)
             static_results = analysis.ai_analysis or {}
@@ -398,7 +410,7 @@ class AnalysisService:
             # Update analysis record
             analysis.ai_analysis = enhanced_analysis
             analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(datetime.timezone.utc)()
             await analysis.save()
                 
             print("AI enhancement completed successfully")
@@ -411,7 +423,7 @@ class AnalysisService:
             # Mark analysis as failed
             analysis.status = AnalysisStatus.FAILED
             analysis.error_message = str(e)
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(datetime.timezone.utc)()
             await analysis.save()
             
             raise e

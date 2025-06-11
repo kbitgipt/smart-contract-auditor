@@ -111,26 +111,6 @@ class ProjectService {
 
   /* Auditor Analysis APIs */
 
-  // static async performStaticAnalysis(projectId, options, token) {
-  //   const response = await fetch(`/api/analysis/analyze/${projectId}/static`, {
-  //     method: 'POST',
-  //     headers: {
-  //       'Content-Type': 'application/json',
-  //       'Authorization': `Bearer ${token}`
-  //     },
-  //     body: JSON.stringify({
-  //       slither_options: options
-  //     })
-  //   });
-
-  //   if (!response.ok) {
-  //     const errorData = await response.json();
-  //     throw new Error(errorData.detail || 'Static analysis failed');
-  //   }
-
-  //   return response.json();
-  // }
-
   // Enhanced Foundry Analysis APIs
   
   static async performFoundryAnalysis(projectId, options, token) {
@@ -185,7 +165,7 @@ class ProjectService {
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        target_files: options.target_files || [],
+        // target_files: options.target_files || [],
         detectors: options.detectors || [],
         exclude_detectors: options.exclude_detectors || [],
         exclude_dependencies: options.exclude_dependencies !== false,

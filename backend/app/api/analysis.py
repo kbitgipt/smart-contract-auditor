@@ -414,7 +414,7 @@ async def modify_analysis_results(
         # Add modification metadata
         analysis.ai_analysis["auditor_modifications"] = {
             "modified_by": str(current_user.id),
-            "modified_at": datetime.utcnow().isoformat(),
+            "modified_at": datetime.now(datetime.timezone.utc)().isoformat(),
             "modification_note": modified_data.get("modification_note", "")
         }
         

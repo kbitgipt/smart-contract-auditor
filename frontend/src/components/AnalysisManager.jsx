@@ -207,22 +207,15 @@ const AnalysisManager = ({ project, onBack, isAuditor }) => {
         </h4>
         
         {/* Project Structure Display for Foundry */}
-        {/* {isFoundryProject && projectStructure && (
-          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h5 className="font-medium text-blue-900 mb-2">Project Structure</h5>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="font-medium">Source files:</span> {projectStructure.structure.source_files?.length || 0}
-              </div>
-              <div>
-                <span className="font-medium">Test files:</span> {projectStructure.structure.test_files?.length || 0}
-              </div>
-              <div>
-                <span className="font-medium">Script files:</span> {projectStructure.structure.script_files?.length || 0}
-              </div>
-            </div>
-          </div>
-        )} */}
+        {isFoundryProject && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <h5 className="font-medium text-blue-900 mb-2">Foundry Project Analysis</h5>
+          <p className="text-blue-800 text-sm">
+            For Foundry projects, Slither will analyze the entire project automatically. 
+            You cannot select specific target files - this ensures complete dependency analysis.
+          </p>
+        </div>
+        )}
 
         {/* Target Files Selection for Foundry */}
         {/* {isFoundryProject && projectStructure && (

@@ -57,8 +57,7 @@ class FileService:
         user_dir.mkdir(exist_ok=True)
         
         # Generate unique filename
-        timestamp = int(datetime.utcnow().timestamp())
-        file_ext = Path(file.filename).suffix
+        timestamp = int(datetime.now(datetime.timezone.utc)().timestamp())
         safe_filename = f"{timestamp}_{file.filename}"
         file_path = user_dir / safe_filename
         
@@ -127,7 +126,7 @@ class FileService:
         
         elif file_path.suffix.lower() == '.zip':
             # Extract to temporary directory
-            extract_dir = FileService.EXTRACTED_DIR / f"temp_{int(datetime.utcnow().timestamp())}"
+            extract_dir = FileService.EXTRACTED_DIR / f"temp_{int(datetime.now(datetime.timezone.utc)().timestamp())}"
             extract_dir.mkdir(exist_ok=True)
 
             try:
@@ -356,7 +355,7 @@ class FileService:
         main_contracts = structure.get("source_files", [])
 
         options = SlitherOptions(
-            target_files=main_contracts if main_contracts else None,
+            target_files=[],
             detectors = [],
             exclude_dependencies=False,
             exclude_informational=False,  # Include for learning

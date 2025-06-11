@@ -31,8 +31,8 @@ class Project(Document):
     # Analysis results
     analysis_id: Optional[str] = None
     analysis_path: Optional[str] = None 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
+    updated_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
     
     class Settings:
         collection = "projects"

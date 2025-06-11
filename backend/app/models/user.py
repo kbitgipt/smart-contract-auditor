@@ -15,10 +15,8 @@ class User(Document):
     mode: UserMode = UserMode.NORMAL
     session_id: Optional[str] = None
     last_login: Optional[datetime] = None
-    # last_activity: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    # is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
+    updated_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
     
     class Settings:
         collection = "users"

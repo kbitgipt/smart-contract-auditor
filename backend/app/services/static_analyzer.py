@@ -169,7 +169,7 @@ class StaticAnalyzer:
                     "stderr": stderr_str
                 }
             
-            # QUAN TRỌNG: Slither return codes
+            # Slither return codes
             # 0: No issues found
             # 1: Issues found, but analysis successful
             # 255: Issues found (vulnerabilities detected)
@@ -183,18 +183,16 @@ class StaticAnalyzer:
 
                     # Debug: print structure
                     if isinstance(slither_data, dict):
-                        # print(f"🔑 JSON keys: {list(slither_data.keys())}")
-
-                        # Check for detectors in different locations
-                        # detectors_found = self._debug_detector_location(slither_data)
-                        # print(f"🐛 Detectors found in structure: {detectors_found}")
-
                         return {
                             "success": True,
                             "data": slither_data,
                             "raw_output": stdout_str,
                             "return_code": process.returncode
                         }
+                        # print(f"🔑 JSON keys: {list(slither_data.keys())}")
+                        # Check for detectors in different locations
+                        # detectors_found = self._debug_detector_location(slither_data)
+                        # print(f"🐛 Detectors found in structure: {detectors_found}")
                         
                 except json.JSONDecodeError as e:
                     print(f"❌ JSON parsing failed: {e}")
@@ -269,8 +267,15 @@ class StaticAnalyzer:
             cmd = [self.slither_path]
             
             absolute_project_path = project_path.resolve()
+
+            # Strategy 1: Project-level analysis (RECOMMENDED)
+            if not options or not options.target_files:
+                # Analyze entire project - best for understanding dependencies
+                cmd.append(str(absolute_project_path))
+                print(f"🔍 Analyzing entire project: {absolute_project_path}")
+
             # Target files or directory
-            if options.target_files:
+            elif options.target_files:
                 # Analyze specific files
                 for file_path in options.target_files:
                     # If project_path is a file, target_files are relative to its parent
@@ -387,11 +392,6 @@ class StaticAnalyzer:
     def parse_slither_results(self, slither_results: Dict) -> Dict:
         """Parse Slither results into standardized format"""
         try:
-            # Early return for failed results
-            if not slither_results.get("success"):
-                print("❌ Slither results marked as failed")
-                return self._empty_result()
-            
             data = slither_results.get("data")
             if not data:
                 print("❌ No data found in Slither results")
@@ -399,18 +399,8 @@ class StaticAnalyzer:
             
             # Try multiple extraction methods
             detectors = self._extract_detectors_comprehensive(data)
-            # print(f"🐛 Extracted {len(detectors)} detectors total")
 
             if not detectors:
-                # print("⚠️ No detectors found!")
-                # print("🔍 Final check - let's see the raw data structure:")
-                # import json
-                # print(f"📄 Complete JSON structure:")
-                # try:
-                #     formatted_json = json.dumps(data, indent=2)[:2000]
-                #     print(formatted_json)
-                # except:
-                #     print(f"Unable to format JSON: {str(data)[:1000]}")
                 return self._empty_result()
             
             # Process detectors
@@ -422,15 +412,11 @@ class StaticAnalyzer:
                     # print(f"⚠️ Detector {i} is not a dict: {type(detector)}")
                     continue
 
-                # print(f"🔍 Processing detector {i}: {list(detector.keys())}")
-
                 # Extract and validate basic info
                 impact = self._safe_get_string(detector, "impact", "").lower()
                 confidence = self._safe_get_string(detector,"confidence", "").lower()
                 check = self._safe_get_string(detector, "check", "Unknown Issue")
                 description = self._safe_get_string(detector, "description", "No description available")
-                
-                # print(f"  Impact: {impact}, Confidence: {confidence}, Check: {check}")
                 
                 # Map impact to severity
                 severity = self._map_impact_to_severity(impact)
@@ -439,7 +425,7 @@ class StaticAnalyzer:
                 
                 # Generate meaningful code snippet
                 elements = detector.get("elements", [])
-                code_snippet = self._extract_code_snippet_improved(elements)
+                code_snippet = self._extract_code_snippet(elements)
                 
                 vulnerabilities.append({
                     "id": f"slither_{i + 1}",
@@ -448,7 +434,7 @@ class StaticAnalyzer:
                     "severity": severity,
                     "impact": impact.title() if impact else "Unknown",
                     "confidence": confidence.title() if confidence else "Unknown",
-                    "recommendation": f"Review and fix {check.lower()} issue. Check Slither documentation for specific remediation steps.",
+                    "recommendation": f"Review and fix {check.lower()} issue.",
                     "code_snippet": code_snippet,
                     "references": ["https://github.com/crytic/slither"],
                     "raw_detector": detector
@@ -532,7 +518,7 @@ class StaticAnalyzer:
         value = data.get(key, default)
         return str(value) if value is not None else default
 
-    def _extract_code_snippet_improved(self, elements: List) -> str:
+    def _extract_code_snippet(self, elements: List) -> str:
         """Improved code snippet extraction"""
         if not elements or not isinstance(elements, list):
             return "No code snippet available"
@@ -579,16 +565,6 @@ class StaticAnalyzer:
             
             # Foundry-specific options
             if options:
-                # Target specific files if specified
-                if options.target_files:
-                    # Instead of analyzing entire project, analyze specific files
-                    cmd = [self.slither_path]
-                    for target_file in options.target_files:
-                        file_path = project_path / target_file
-                        if file_path.exists():
-                            cmd.append(str(file_path.resolve()))
-                    cmd.extend(['--json', '-'])
-                
                 # Detector options
                 if options.detectors:
                     cmd.extend(['--detect', ','.join(options.detectors)])

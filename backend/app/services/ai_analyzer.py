@@ -56,6 +56,30 @@ class AIAnalyzer:
             "required": ["vulnerabilities", "summary", "general_recommendations"]
         }
     
+    async def _read_file_safely(self, file_path: Path) -> str:
+        """Safely read file with multiple encoding attempts"""
+        try:
+            # Try multiple encodings
+            encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']
+            
+            for encoding in encodings:
+                try:
+                    with open(file_path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    return content
+                except UnicodeDecodeError:
+                    continue
+            
+            # If all encodings fail, read as binary and handle
+            with open(file_path, 'rb') as f:
+                binary_content = f.read()
+                content = binary_content.decode('utf-8', errors='ignore')
+                return content
+                
+        except Exception as e:
+            print(f"❌ Error reading file {file_path}: {e}")
+            return f"// ERROR: Could not read file {file_path.name}: {str(e)}"
+
     async def analyze_vulnerabilities(self, slither_results: Dict, source_code: str) -> Dict:
         """Analyze Slither results with OpenAI using file uploads for better processing"""
         try:
@@ -310,7 +334,11 @@ Use the code interpreter to analyze the source code and identify the exact locat
             try:
                 # Upload main contract files
                 for i, contract_path in enumerate(main_contracts):
-                    if Path(contract_path).exists():
+                    contract_path_obj = Path(contract_path)
+                    if contract_path_obj.exists():
+                        # Use safe file reading
+                        contract_content = await self._read_file_safely(contract_path_obj)
+
                         # Read content and save as .js file
                         with open(contract_path, 'r', encoding='utf-8') as f:
                             contract_content = f.read()
@@ -352,13 +380,16 @@ Use the code interpreter to analyze the source code and identify the exact locat
                 uploaded_files.append(slither_file.id)
                 
                 # Create comprehensive analysis prompt
-                prompt = """
+                uploaded_contract_count = len([f for f in uploaded_files if 'contract_' in str(f)])
+                prompt = f"""
 I have uploaded a Foundry project for comprehensive security analysis:
 
 **Files uploaded:**
-- Multiple Solidity contract files (.sol)
+- {uploaded_contract_count} Solidity contract files (renamed to .js for compatibility)
 - project_structure.json - Complete project structure and metadata
 - slither_results.json - Static analysis results from Slither
+
+**Contract files analyzed:** {', '.join([Path(c).name for c in main_contracts[:uploaded_contract_count]])}
 
 Please provide a comprehensive security assessment of this Foundry project:
 

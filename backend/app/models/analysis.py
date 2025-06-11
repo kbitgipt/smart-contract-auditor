@@ -27,9 +27,6 @@ class Analysis(Document):
     analysis_type: AnalysisType
     status: AnalysisStatus = AnalysisStatus.PENDING
     
-    # Analysis configuration
-    # config: Dict[str, Any] = {}
-    
     # Results
     slither_results: Optional[Dict[str, Any]] = None
     ai_analysis: Optional[Dict[str, Any]] = None
@@ -41,14 +38,13 @@ class Analysis(Document):
     
     # Error information
     error_message: Optional[str] = None
-    # error_details: Optional[Dict[str, Any]] = None
     
     # Timing
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
+    updated_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
     
     class Settings:
         collection = "analyses"
