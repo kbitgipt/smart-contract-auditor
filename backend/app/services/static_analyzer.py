@@ -21,7 +21,7 @@ class StaticAnalyzer:
         if os.path.exists('/.dockerenv'):
             self.slither_path = "slither"  # Use global slither in Docker
         else:
-            self.slither_path = "/mnt/d/HUST/DoAnTotnghiep/smart-contract-auditor/backend/venv/bin/slither"
+            self.slither_path = "/backend/venv/bin/slither" # your local slither path
 
     # Supported Slither detectors
     AVAILABLE_DETECTORS = [
