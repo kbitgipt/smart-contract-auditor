@@ -10,56 +10,18 @@ class AIAnalyzer:
     
     def __init__(self):
         self.openai_client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY")
+            api_key=os.getenv("OPENAI_API_KEY"),
+            default_headers={"OpenAI-Beta": "assistants=v2"}
         )
+        self.assistant_id = os.getenv("OPENAI_ASSISTANT_ID")  
         
-        # Response schema for structured output
-        self.vulnerability_schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "vulnerabilities": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "id": {"type": "string"},
-                            "title": {"type": "string"},
-                            "description": {"type": "string"},
-                            "severity": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]},
-                            "impact": {"type": "string"},
-                            "recommendation": {"type": "string"},
-                            "code_snippet": {"type": "string"},
-                            "references": {"type": "array", "items": {"type": "string"}}
-                        },
-                        "required": ["id", "title", "description", "severity", "impact", "recommendation", "code_snippet", "references"]
-                    }
-                },
-                "summary": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "total": {"type": "integer"},
-                        "high": {"type": "integer"},
-                        "medium": {"type": "integer"},
-                        "low": {"type": "integer"},
-                        "informational": {"type": "integer"}
-                    },
-                    "required": ["total", "high", "medium", "low", "informational"]
-                },
-                "general_recommendations": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "required": ["vulnerabilities", "summary", "general_recommendations"]
-        }
+        if not self.assistant_id:
+            raise ValueError("OPENAI_ASSISTANT_ID must be set in environment variables")
+
     
     async def _read_file_safely(self, file_path: Path) -> str:
         """Safely read file with multiple encoding attempts"""
         try:
-            # Try multiple encodings
             encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']
             
             for encoding in encodings:
@@ -80,8 +42,226 @@ class AIAnalyzer:
             print(f"❌ Error reading file {file_path}: {e}")
             return f"// ERROR: Could not read file {file_path.name}: {str(e)}"
 
-    async def analyze_vulnerabilities(self, slither_results: Dict, source_code: str) -> Dict:
-        """Analyze Slither results with OpenAI using file uploads for better processing"""
+# Handle upload source code on AI assistant    
+
+    async def _upload_source_files(self, source_code: str, project_id: str, original_filename: str = None) -> str:
+        """Upload source code file with .js extension and Solidity header"""
+        try:
+            # Check if source file already exists for this project
+            existing_source_files = await self._find_existing_source_files(project_id)
+            
+            if original_filename:
+                base_name = Path(original_filename).stem
+                expected_filename = f"{project_id}_{base_name}.js"
+            else:
+                expected_filename = f"{project_id}_source.js"
+            
+            # Check if the exact file already exists
+            for file_id in existing_source_files:
+                try:
+                    file_details = await self.openai_client.files.retrieve(file_id)
+                    if file_details.filename == expected_filename:
+                        print(f"✅ Reusing existing source file: {expected_filename}")
+                        return file_id
+                except Exception as e:
+                    print(f"Error checking existing file {file_id}: {e}")
+                    continue
+            
+            # If not found, upload new file
+            print(f"📤 Uploading new source file: {expected_filename}")
+            temp_dir = Path(tempfile.mkdtemp())
+            source_file_path = temp_dir / expected_filename
+            
+            # Add header comment to indicate this is a Solidity file
+            file_content = f"// SOLIDITY CONTRACT: {original_filename or 'source.sol'}\n"
+            file_content += "// File extension changed to .js for OpenAI compatibility\n\n"
+            file_content += source_code
+            
+            with open(source_file_path, 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            
+            # Upload to OpenAI
+            with open(source_file_path, "rb") as f:
+                file_obj = await self.openai_client.files.create(
+                    file=f,
+                    purpose="assistants"
+                )
+            
+            # Clean up local temp file
+            try:
+                import shutil
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"Error cleaning up temp directory: {e}")
+            
+            return file_obj.id
+            
+        except Exception as e:
+            print(f"Error uploading source file: {e}")
+            raise e
+
+    async def _upload_foundry_source_files(self, main_contracts: List[str], project_id: str) -> List[str]:
+        """Upload multiple source files for Foundry project with .js extension"""
+        uploaded_file_ids = []
+        try:
+            # Get existing source files for this project
+            existing_source_files = await self._find_existing_source_files(project_id)
+
+            for contract_path in main_contracts:
+                contract_path_obj = Path(contract_path)
+                if contract_path_obj.exists():
+                    original_filename = contract_path_obj.name
+                    base_name = contract_path_obj.stem
+                    expected_filename = f"{project_id}_{base_name}.js"
+                    
+                    # Check if file already exists
+                    file_id_found = None
+                    for file_id in existing_source_files:
+                        try:
+                            file_details = await self.openai_client.files.retrieve(file_id)
+                            if file_details.filename == expected_filename:
+                                print(f"✅ Reusing existing Foundry source file: {expected_filename}")
+                                file_id_found = file_id
+                                break
+                        except Exception as e:
+                            print(f"Error checking existing file {file_id}: {e}")
+                            continue
+                    
+                    if file_id_found:
+                        uploaded_file_ids.append(file_id_found)
+                    else:
+                        # Upload new file
+                        print(f"📤 Uploading new Foundry source file: {expected_filename}")
+                        contract_content = await self._read_file_safely(contract_path_obj)
+                        
+                        temp_dir = Path(tempfile.mkdtemp())
+                        temp_file_path = temp_dir / expected_filename
+                        
+                        # Add header comment to indicate this is a Solidity file
+                        file_content = f"// SOLIDITY CONTRACT: {original_filename}\n"
+                        file_content += "// File extension changed to .js for OpenAI compatibility\n\n"
+                        file_content += contract_content
+                        
+                        with open(temp_file_path, 'w', encoding='utf-8') as f:
+                            f.write(file_content)
+                        
+                        with open(temp_file_path, "rb") as f:
+                            file_obj = await self.openai_client.files.create(
+                                file=f,
+                                purpose="assistants"
+                            )
+                        
+                    uploaded_file_ids.append(file_obj.id)
+
+                    # Clean up local temp file
+                    try:
+                        import shutil
+                        shutil.rmtree(temp_dir)
+                    except Exception as e:
+                        print(f"Error cleaning up temp directory: {e}")
+            
+            return uploaded_file_ids
+            
+        except Exception as e:
+                    print(f"Error uploading Foundry source files: {e}")
+                    # Clean up any uploaded files on error
+                    await self._cleanup_assistant_files(uploaded_file_ids)
+                    raise e
+        
+# Handle upload slither result on AI assistant 
+
+    async def _upload_slither_results(self, slither_results: Dict, project_id: str) -> str:
+        """Upload Slither analysis results as temporary file"""
+        try:
+            # Create temporary file for Slither results
+            temp_dir = Path(tempfile.mkdtemp())
+            slither_file_path = temp_dir / f"{project_id}_slither_analysis.json"
+            
+            with open(slither_file_path, 'w', encoding='utf-8') as f:
+                json.dump(slither_results, f, indent=2)
+            
+            # Upload to OpenAI
+            with open(slither_file_path, "rb") as f:
+                file_obj = await self.openai_client.files.create(
+                    file=f,
+                    purpose="assistants"
+                )
+            
+            # Clean up local temp file
+            try:
+                import shutil
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"Error cleaning up temp directory: {e}")
+            
+            return file_obj.id
+            
+        except Exception as e:
+            print(f"Error uploading Slither results: {e}")
+            raise e
+
+    async def _cleanup_assistant_files(self, file_ids: List[str]):
+        """Delete files from OpenAI (v2 API doesn't need assistant file removal)"""
+        for file_id in file_ids:
+            try:
+                # In v2, just delete the file directly
+                await self.openai_client.files.delete(file_id)
+                print(f"✅ Deleted file: {file_id}")
+            except Exception as e:
+                print(f"Error cleaning up file {file_id}: {e}")
+
+    async def _find_existing_slither_files(self, project_id: str = None) -> List[str]:
+        """Find existing Slither analysis files in assistant"""
+        try:
+            # Get all files attached to assistant
+            files = await self.openai_client.files.list()
+            
+            slither_file_ids = []
+            for file_info in files.data:
+                # Get file details to check filename
+                is_slither = "slither" in file_info.filename.lower()
+
+                # If project_id is specified, also check if filename contains project_id
+                if project_id:
+                    is_project_match = project_id in file_info.filename
+                    if is_slither and is_project_match:
+                        slither_file_ids.append(file_info.id)
+                else:
+                    # If no project_id specified, return all slither files
+                    if is_slither:
+                        slither_file_ids.append(file_info.id)
+            
+            return slither_file_ids
+            
+        except Exception as e:
+            print(f"Error finding existing Slither files: {e}")
+            return []
+
+    async def _find_existing_source_files(self, project_id: str) -> List[str]:
+        """Find existing source files for a specific project"""
+        try:
+            files = await self.openai_client.files.list()
+            
+            source_file_ids = []
+            for file_info in files.data:
+                if file_info.filename:
+                    # Check if filename contains project_id and is not a slither file
+                    is_project_match = project_id in file_info.filename
+                    is_not_slither = "slither" not in file_info.filename.lower()
+                    
+                    if is_project_match and is_not_slither:
+                        source_file_ids.append(file_info.id)
+            
+            return source_file_ids
+            
+        except Exception as e:
+            print(f"Error finding existing source files: {e}")
+            return []
+
+# Analyze single file with assistant - uploads source code + latest Slither results
+
+    async def analyze_vulnerabilities(self, slither_results: Dict, source_code: str, project_id: str, original_filename: str = None) -> Dict:
+        """Analyze single file with assistant - uploads source code + latest Slither results"""
         try:
             if not slither_results.get("success") or not slither_results.get("data"):
                 return {
@@ -105,346 +285,238 @@ class AIAnalyzer:
                     "ai_recommendations": []
                 }
             
-            # Create temporary files for source code and Slither output
-            source_file_id, slither_file_id = await self._upload_analysis_files(
-                source_code, slither_results
-            )
+            # Step 1: Clean up old Slither analysis files
+            old_slither_files = await self._find_existing_slither_files(project_id)
+            if old_slither_files:
+                await self._cleanup_assistant_files(old_slither_files)
+            
+            # Step 2: Upload source code (keep in assistant)
+            source_file_id = await self._upload_source_files(source_code, project_id, original_filename)
+            
+            # Step 3: Upload latest Slither results (temporary)
+            slither_file_id = await self._upload_slither_results(slither_results, project_id)
             
             try:
-                # Create analysis prompt that references the uploaded files
-                prompt = self._create_file_based_analysis_prompt()
+                # Step 4: Create thread and run analysis
+                thread = await self.openai_client.beta.threads.create()
                 
-                response = await self.openai_client.chat.completions.create(
-                    model="gpt-4.1-nano",  # Use GPT-4 for better file processing
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt,
-                            "attachments": [
-                                {"file_id": source_file_id, "tools": [{"type": "code_interpreter"}]},
-                                {"file_id": slither_file_id, "tools": [{"type": "file_search"}]}
-                            ]
-                        }
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "vulnerability_analysis",
-                            "strict": True,
-                            "schema": self.vulnerability_schema
-                        }
-                    },
-                    temperature=0.1,
-                    max_tokens=6000
+                if original_filename:
+                    base_name = Path(original_filename).stem
+                    source_filename = f"{project_id}_{base_name}.js"
+                else:
+                    source_filename = f"{project_id}_source.js"
+                slither_filename = f"{project_id}_slither_analysis.json"
+
+                # Add message to thread
+                await self.openai_client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=f"""
+Please analyze the smart contract security for:
+
+**Contract File:** {original_filename or 'source.js'}
+**Analysis Type:** Single File Analysis
+
+I have uploaded:
+1. The source code file: {source_filename}
+2. The latest Slither static analysis results: {slither_filename}
+
+Please provide a comprehensive security assessment by:
+
+1. Reviewing the source code for business logic and security patterns
+2. Validating each Slither finding against the actual source code
+3. Identifying any additional vulnerabilities not caught by static analysis
+4. Providing specific, actionable recommendations for each issue
+
+Focus on practical security concerns that could impact the contract's operation or user funds.
+""",
+                    attachments=[
+                        {"file_id": source_file_id, "tools": [{"type": "code_interpreter"}]},
+                        {"file_id": slither_file_id, "tools": [{"type": "file_search"}]}
+                    ]
                 )
                 
-                # Parse OpenAI response
-                ai_analysis = json.loads(response.choices[0].message.content)
+                # Run the assistant
+                run = await self.openai_client.beta.threads.runs.create(
+                    thread_id=thread.id,
+                    assistant_id=self.assistant_id
+                )
                 
-                return {
-                    "success": True,
-                    "vulnerabilities": ai_analysis.get("vulnerabilities", []),
-                    "summary": ai_analysis.get("summary", {}),
-                    "ai_recommendations": ai_analysis.get("general_recommendations", [])
-                }
+                # Wait for completion
+                import asyncio
+                while run.status in ["queued", "in_progress"]:
+                    await asyncio.sleep(1)
+                    run = await self.openai_client.beta.threads.runs.retrieve(
+                        thread_id=thread.id,
+                        run_id=run.id
+                    )
+                
+                if run.status == "completed":
+                    # Get the assistant's response
+                    messages = await self.openai_client.beta.threads.messages.list(
+                        thread_id=thread.id
+                    )
+                    
+                    assistant_message = messages.data[0]
+                    response_content = assistant_message.content[0].text.value
+                    
+                    # Parse JSON response
+                    ai_analysis = json.loads(response_content)
+                    
+                    return {
+                        "success": True,
+                        "vulnerabilities": ai_analysis.get("vulnerabilities", []),
+                        "summary": ai_analysis.get("summary", {}),
+                        "ai_recommendations": ai_analysis.get("general_recommendations", [])
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Assistant run failed with status: {run.status}"
+                    }
                 
             finally:
-                # Clean up uploaded files
-                await self._cleanup_files([source_file_id, slither_file_id])
+                # Step 5: Clean up Slither file (keep source code)
+                await self._cleanup_assistant_files([slither_file_id])
                 
         except Exception as e:
-            print(f"OpenAI analysis error: {e}")
+            print(f"Assistant analysis error: {e}")
             return {
                 "success": False,
                 "error": f"AI analysis failed: {str(e)}"
             }
-    
-    async def _upload_analysis_files(self, source_code: str, slither_results: Dict) -> tuple:
-        """Upload source code and Slither results as files to OpenAI"""
-        
-        # Create temporary directory
-        temp_dir = Path(tempfile.mkdtemp())
-        
+
+# Analyze foundry project with assistant 
+
+    async def analyze_foundry_project(self, slither_results: Dict, main_contracts: List[str], project_id: str) -> Dict:
+        """Analyze Foundry project using Assistant API with .js files"""
         try:
-            # Write source code to file
-            source_file_path = temp_dir / "contract_source.js"
-            with open(source_file_path, 'w', encoding='utf-8') as f:
-                f.write("// SOLIDITY SMART CONTRACT CODE\n")
-                f.write("// File extension changed to .js for OpenAI compatibility\n")
-                f.write(source_code)
+            # Step 1: Clean up old Slither files only (keep source files)
+            old_slither_files = await self._find_existing_slither_files(project_id)
+            if old_slither_files:
+                print(f"🗑️ Cleaning up {len(old_slither_files)} old Slither files for project {project_id}")
+                await self._cleanup_assistant_files(old_slither_files)
             
-            # Write Slither results to JSON file
-            slither_file_path = temp_dir / "slither_analysis.json"
+            # Step 2: Upload or reuse source files
+            source_file_ids = await self._upload_foundry_source_files(main_contracts, project_id)
+            
+            # Step 3: Upload fresh Slither results
+            temp_dir = Path(tempfile.mkdtemp())
+            slither_file_path = temp_dir / f"{project_id}_slither_results.json"
             with open(slither_file_path, 'w', encoding='utf-8') as f:
                 json.dump(slither_results, f, indent=2)
             
-            # Upload files to OpenAI
-            source_file = await self.openai_client.files.create(
-                file=open(source_file_path, "rb"),
-                purpose="assistants"
-            )
-            
-            slither_file = await self.openai_client.files.create(
-                file=open(slither_file_path, "rb"),
-                purpose="assistants"
-            )
-            
-            return source_file.id, slither_file.id
-            
-        except Exception as e:
-            print(f"Error uploading files: {e}")
-            raise e
-        finally:
-            # Clean up local temporary files
-            try:
-                import shutil
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                print(f"Error cleaning up temp directory: {e}")
-    
-    def _create_file_based_analysis_prompt(self) -> str:
-        """Create analysis prompt that references uploaded files"""
-        
-        prompt = """
-I have uploaded two files for smart contract security analysis:
-
-1. **contract_source.js** - The Solidity smart contract source code
-2. **slither_analysis.json** - The raw output from Slither static analysis tool
-
-Please analyze these files and provide a comprehensive security assessment following these requirements:
-
-## Analysis Tasks:
-
-1. **Review the source code** to understand the contract's functionality and business logic
-2. **Examine the Slither findings** to identify specific vulnerabilities and issues
-3. **Cross-reference** Slither findings with the actual source code for validation
-4. **Categorize vulnerabilities** by severity using these guidelines:
-   - **HIGH**: Direct loss of funds, unauthorized access, critical business logic flaws
-   - **MEDIUM**: Potential loss of funds, access control issues, state manipulation
-   - **LOW**: Best practice violations, minor logic issues, optimization opportunities
-   - **INFORMATIONAL**: Code quality, documentation, style improvements
-
-## Output Requirements:
-
-For each vulnerability found:
-- Generate a unique ID
-- Provide clear title and description
-- Assess severity level
-- Explain potential impact
-- Give specific remediation recommendations
-- Include relevant code snippets where applicable
-- Add references to additional resources if helpful
-
-Also provide:
-- Summary statistics of all findings
-- General security recommendations for the contract
-
-Use the code interpreter to analyze patterns in the source code and file search to examine the Slither output structure. Focus on providing actionable, specific recommendations that developers can implement immediately.
-"""
-        return prompt
-    
-    async def _cleanup_files(self, file_ids: List[str]):
-        """Clean up uploaded files from OpenAI"""
-        for file_id in file_ids:
-            try:
-                await self.openai_client.files.delete(file_id)
-            except Exception as e:
-                print(f"Error deleting file {file_id}: {e}")
-    
-    async def enhance_vulnerability_analysis(self, vulnerability: Dict, source_code: str) -> Dict:
-        """Enhance individual vulnerability with more detailed AI analysis using file upload"""
-        try:
-            # Create temporary file for source code
-            temp_dir = Path(tempfile.mkdtemp())
-            source_file_path = temp_dir / "contract_source.sol"
-            
-            with open(source_file_path, 'w', encoding='utf-8') as f:
-                f.write("// SOLIDITY SMART CONTRACT CODE\n")
-                f.write("// File extension changed to .js for OpenAI compatibility\n\n")
-                f.write(source_code)
-            
-            # Upload source file
-            source_file = await self.openai_client.files.create(
-                file=open(source_file_path, "rb"),
-                purpose="assistants"
-            )
-            
-            try:
-                prompt = f"""
-I have uploaded the smart contract source code and need detailed analysis of this specific vulnerability:
-
-**VULNERABILITY:**
-{json.dumps(vulnerability, indent=2)}
-
-Please analyze the uploaded source code and provide:
-
-1. **Detailed explanation** of how this vulnerability manifests in the code
-2. **Step-by-step exploitation scenario** showing how an attacker could exploit this
-3. **Specific code fix** with before/after examples from the actual source
-4. **Prevention strategies** to avoid similar issues in the future
-5. **Risk assessment** considering the contract's specific implementation
-
-Use the code interpreter to analyze the source code and identify the exact locations and patterns related to this vulnerability.
-"""
-                
-                response = await self.openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt,
-                            "attachments": [
-                                {"file_id": source_file.id, "tools": [{"type": "code_interpreter"}]}
-                            ]
-                        }
-                    ],
-                    temperature=0.1,
-                    max_tokens=2000
-                )
-                
-                return {
-                    "success": True,
-                    "enhanced_analysis": response.choices[0].message.content
-                }
-                
-            finally:
-                # Clean up uploaded file
-                await self._cleanup_files([source_file.id])
-                
-                # Clean up local temp file
-                try:
-                    import shutil
-                    shutil.rmtree(temp_dir)
-                except Exception as e:
-                    print(f"Error cleaning up temp directory: {e}")
-                    
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"Enhancement failed: {str(e)}"
-            }
-    
-    async def analyze_foundry_project(self, project_structure: Dict, slither_results: Dict, main_contracts: List[str]) -> Dict:
-        """Analyze Foundry project with comprehensive file upload approach"""
-        try:
-            # Create temporary directory for project files
-            temp_dir = Path(tempfile.mkdtemp())
-            uploaded_files = []
-            
-            try:
-                # Upload main contract files
-                for i, contract_path in enumerate(main_contracts):
-                    contract_path_obj = Path(contract_path)
-                    if contract_path_obj.exists():
-                        # Use safe file reading
-                        contract_content = await self._read_file_safely(contract_path_obj)
-
-                        # Read content and save as .js file
-                        with open(contract_path, 'r', encoding='utf-8') as f:
-                            contract_content = f.read()
-                        
-                        # Create .js file with Solidity content
-                        js_file_path = temp_dir / f"contract_{i}.js"
-                        with open(js_file_path, 'w', encoding='utf-8') as f:
-                            f.write(f"// SOLIDITY CONTRACT: {Path(contract_path).name}\n")
-                            f.write("// File extension changed to .js for OpenAI compatibility\n\n")
-                            f.write(contract_content)
-                        
-                        with open(js_file_path, "rb") as f:
-                            contract_file = await self.openai_client.files.create(
-                                file=f,
-                                purpose="assistants"
-                            )
-                        uploaded_files.append(contract_file.id)
-                
-                # Upload project structure as JSON
-                structure_file_path = temp_dir / "project_structure.json"
-                with open(structure_file_path, 'w', encoding='utf-8') as f:
-                    json.dump(project_structure, f, indent=2)
-                
-                structure_file = await self.openai_client.files.create(
-                    file=open(structure_file_path, "rb"),
-                    purpose="assistants"
-                )
-                uploaded_files.append(structure_file.id)
-                
-                # Upload Slither results
-                slither_file_path = temp_dir / "slither_results.json"
-                with open(slither_file_path, 'w', encoding='utf-8') as f:
-                    json.dump(slither_results, f, indent=2)
-                
+            with open(slither_file_path, "rb") as f:
                 slither_file = await self.openai_client.files.create(
-                    file=open(slither_file_path, "rb"),
+                    file=f,
                     purpose="assistants"
                 )
-                uploaded_files.append(slither_file.id)
+            
+            try:
+                # Step 4: Create thread and run analysis using Assistant
+                thread = await self.openai_client.beta.threads.create()
                 
                 # Create comprehensive analysis prompt
-                uploaded_contract_count = len([f for f in uploaded_files if 'contract_' in str(f)])
+                contract_names = [Path(c).name for c in main_contracts]
+                uploaded_filenames = [f"{project_id}_{Path(c).stem}.js" for c in main_contracts]
+                
                 prompt = f"""
-I have uploaded a Foundry project for comprehensive security analysis:
+Please analyze the smart contract security for this Foundry project:
 
-**Files uploaded:**
-- {uploaded_contract_count} Solidity contract files (renamed to .js for compatibility)
-- project_structure.json - Complete project structure and metadata
-- slither_results.json - Static analysis results from Slither
+**Project ID:** {project_id}
+**Analysis Type:** Foundry Project Analysis
 
-**Contract files analyzed:** {', '.join([Path(c).name for c in main_contracts[:uploaded_contract_count]])}
+I have uploaded:
+- Contract files: {', '.join(uploaded_filenames)} (Solidity code with .js extension for compatibility)
+- Slither analysis results: {project_id}_slither_results.json
 
-Please provide a comprehensive security assessment of this Foundry project:
+**Original contract files analyzed:** {', '.join(contract_names)}
 
-1. **Project Overview**: Analyze the project structure and identify the main contracts and their relationships
+Please provide a comprehensive security assessment by:
+
+1. **Project Overview**: Analyze the project structure and identify main contracts and their relationships
 2. **Vulnerability Analysis**: Review all Slither findings and validate them against the source code
 3. **Cross-Contract Analysis**: Identify potential issues in contract interactions and dependencies
 4. **Architecture Review**: Assess the overall security architecture and design patterns
 5. **Foundry-Specific Issues**: Check for testing coverage, deployment scripts, and configuration issues
 
-Use both file search and code interpreter to thoroughly analyze all uploaded files and provide actionable security recommendations.
+Note: All source files have .js extension for upload compatibility but contain Solidity smart contract code.
+Focus on practical security concerns that could impact the contracts' operation or user funds.
 """
                 
                 # Prepare file attachments
-                attachments = []
-                for file_id in uploaded_files:
-                    attachments.append({
-                        "file_id": file_id, 
-                        "tools": [{"type": "code_interpreter"}, {"type": "file_search"}]
-                    })
+                # all_file_ids = source_file_ids + [slither_file.id]
+                attachments=[
+                        {"file_id": source_file_ids, "tools": [{"type": "code_interpreter"}]},
+                        {"file_id": slither_file.id, "tools": [{"type": "file_search"}]}
+                    ]
+                # for file_id in all_file_ids:
+                #     attachments.append({
+                #         "file_id": file_id, 
+                #         "tools": [{"type": "code_interpreter"}]
+                #     })
                 
-                response = await self.openai_client.chat.completions.create(
-                    model="gpt-4.1-nano",  
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt,
-                            "attachments": attachments
-                        }
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "foundry_analysis",
-                            "strict": True,
-                            "schema": self.vulnerability_schema
-                        }
-                    },
-                    temperature=0.1,
-                    max_tokens=9000
+                # Add message to thread
+                await self.openai_client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=prompt,
+                    attachments=attachments
                 )
                 
-                # Parse response
-                ai_analysis = json.loads(response.choices[0].message.content)
+                # Run the assistant
+                run = await self.openai_client.beta.threads.runs.create(
+                    thread_id=thread.id,
+                    assistant_id=self.assistant_id
+                )
                 
-                return {
-                    "success": True,
-                    "vulnerabilities": ai_analysis.get("vulnerabilities", []),
-                    "summary": ai_analysis.get("summary", {}),
-                    "ai_recommendations": ai_analysis.get("general_recommendations", []),
-                    "project_analysis": True
-                }
+                # Wait for completion
+                import asyncio
+                while run.status in ["queued", "in_progress"]:
+                    await asyncio.sleep(1)
+                    run = await self.openai_client.beta.threads.runs.retrieve(
+                        thread_id=thread.id,
+                        run_id=run.id
+                    )
+                
+                if run.status == "completed":
+                    # Get the assistant's response
+                    messages = await self.openai_client.beta.threads.messages.list(
+                        thread_id=thread.id
+                    )
+                    
+                    assistant_message = messages.data[0]
+                    response_content = assistant_message.content[0].text.value
+                    
+                    # Try to parse as JSON, if not possible, create structured response
+                    try:
+                        ai_analysis = json.loads(response_content)
+                    except json.JSONDecodeError:
+                        # Create structured response from text
+                        ai_analysis = {
+                            "vulnerabilities": [],
+                            "summary": {"total": 0, "high": 0, "medium": 0, "low": 0, "informational": 0},
+                            "general_recommendations": [response_content],
+                            "raw_analysis": response_content
+                        }
+                    
+                    return {
+                        "success": True,
+                        "vulnerabilities": ai_analysis.get("vulnerabilities", []),
+                        "summary": ai_analysis.get("summary", {}),
+                        "ai_recommendations": ai_analysis.get("general_recommendations", []),
+                        "project_analysis": True
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Assistant run failed with status: {run.status}"
+                    }
                 
             finally:
-                # Clean up all uploaded files
-                await self._cleanup_files(uploaded_files)
+                # Step 5: Clean up only Slither file (keep source files for reuse)
+                print(f"🗑️ Cleaning up temporary Slither file for project {project_id}")
+                await self._cleanup_assistant_files([slither_file.id])
                 
                 # Clean up local temp directory
                 try:
@@ -459,4 +531,4 @@ Use both file search and code interpreter to thoroughly analyze all uploaded fil
                 "success": False,
                 "error": f"Foundry analysis failed: {str(e)}"
             }
-        
+

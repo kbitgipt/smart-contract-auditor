@@ -1,9 +1,8 @@
-import os, hashlib, zipfile, aiofiles, shutil
+import os, hashlib, zipfile, aiofiles
 from pathlib import Path
 from typing import Tuple, List, Dict, Optional
 from fastapi import HTTPException, UploadFile
-from datetime import datetime
-from app.services.static_analyzer import SlitherOptions
+from datetime import datetime, timezone
 
 class FileService:
     
@@ -57,7 +56,7 @@ class FileService:
         user_dir.mkdir(exist_ok=True)
         
         # Generate unique filename
-        timestamp = int(datetime.now(datetime.timezone.utc)().timestamp())
+        timestamp = int(datetime.now(timezone.utc).timestamp())
         safe_filename = f"{timestamp}_{file.filename}"
         file_path = user_dir / safe_filename
         
@@ -126,7 +125,7 @@ class FileService:
         
         elif file_path.suffix.lower() == '.zip':
             # Extract to temporary directory
-            extract_dir = FileService.EXTRACTED_DIR / f"temp_{int(datetime.now(datetime.timezone.utc)().timestamp())}"
+            extract_dir = FileService.EXTRACTED_DIR / f"temp_{int(datetime.now(timezone.utc).timestamp())}"
             extract_dir.mkdir(exist_ok=True)
 
             try:
@@ -345,23 +344,4 @@ class FileService:
                 "error": str(e)
             }
     
-    @staticmethod
-    def get_foundry_analysis_options(project_path: Path) -> 'SlitherOptions':
-        """Get recommended Slither options for Foundry project"""
-        
-        structure = FileService.analyze_foundry_project_structure(project_path)
-
-        # Get main source files (exclude tests and dependencies)
-        main_contracts = structure.get("source_files", [])
-
-        options = SlitherOptions(
-            target_files=[],
-            detectors = [],
-            exclude_dependencies=False,
-            exclude_informational=False,  # Include for learning
-            exclude_optimization=True,    # Skip gas optimizations
-            exclude_low=False            # Include low severity
-        )
-        
-        return options
     

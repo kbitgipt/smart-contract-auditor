@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Optional, List
+from datetime import datetime, timezone
+from typing import Optional
 from beanie import Document
 from pydantic import Field
 from enum import Enum
@@ -31,8 +31,8 @@ class Project(Document):
     # Analysis results
     analysis_id: Optional[str] = None
     analysis_path: Optional[str] = None 
-    created_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
-    updated_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     class Settings:
         collection = "projects"

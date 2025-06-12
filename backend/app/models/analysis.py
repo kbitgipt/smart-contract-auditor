@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
 from beanie import Document
 from pydantic import Field
 from enum import Enum
@@ -43,8 +43,8 @@ class Analysis(Document):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     
-    created_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
-    updated_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     class Settings:
         collection = "analyses"

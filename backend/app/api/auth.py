@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from datetime import datetime
+from datetime import datetime, timezone
 from app.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserModeUpdate
 from app.services.auth_service import AuthService
 from app.core.security import verify_token
@@ -35,7 +35,7 @@ async def get_current_user_dependency(credentials: HTTPAuthorizationCredentials 
             )
         
         # Update last activity (nếu cần)
-        # user.last_activity = datetime.now(datetime.timezone.utc)()
+        # user.last_activity = datetime.now(timezone.utc)
         await user.save()
         
         return user
@@ -123,7 +123,7 @@ async def update_user_mode(
     """Update user mode (normal/auditor)"""
     try:
         current_user.mode = mode_data.user_mode
-        current_user.updated_at = datetime.now(datetime.timezone.utc)()
+        current_user.updated_at = datetime.now(timezone.utc)
         
         await current_user.save()
         

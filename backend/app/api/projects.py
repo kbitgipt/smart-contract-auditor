@@ -5,7 +5,7 @@ from app.models.project import Project, ProjectStatus, ProjectType
 from app.schemas.project import ProjectResponse, ProjectDetailResponse, ProjectSourceResponse
 from app.api.auth import get_current_user_dependency
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter(tags=["Projects"])
 
@@ -191,7 +191,7 @@ async def update_project(
     if description is not None:
         project.description = description
     
-    project.updated_at = datetime.now(datetime.timezone.utc)()
+    project.updated_at = datetime.now(timezone.utc)
     await project.save()
     
     return ProjectDetailResponse(

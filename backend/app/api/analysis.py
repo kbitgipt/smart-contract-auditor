@@ -10,7 +10,7 @@ from app.services.static_analyzer import SlitherOptions, StaticAnalyzer
 from app.api.auth import get_current_user_dependency
 from pathlib import Path
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter(tags=["Analysis"])
 
@@ -414,7 +414,7 @@ async def modify_analysis_results(
         # Add modification metadata
         analysis.ai_analysis["auditor_modifications"] = {
             "modified_by": str(current_user.id),
-            "modified_at": datetime.now(datetime.timezone.utc)().isoformat(),
+            "modified_at": datetime.now(timezone.utc).isoformat(),
             "modification_note": modified_data.get("modification_note", "")
         }
         

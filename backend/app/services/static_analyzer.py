@@ -21,7 +21,7 @@ class StaticAnalyzer:
         if os.path.exists('/.dockerenv'):
             self.slither_path = "slither"  # Use global slither in Docker
         else:
-            self.slither_path = "/backend/venv/bin/slither" # your local slither path
+            self.slither_path = "/mnt/d/HUST/DoAnTotnghiep/smart-contract-auditor/backend/venv/bin/slither"
 
     # Supported Slither detectors
     AVAILABLE_DETECTORS = [
@@ -187,7 +187,8 @@ class StaticAnalyzer:
                             "success": True,
                             "data": slither_data,
                             "raw_output": stdout_str,
-                            "return_code": process.returncode
+                            "return_code": process.returncode,
+                            "original_filename": file_path.name 
                         }
                         # print(f"🔑 JSON keys: {list(slither_data.keys())}")
                         # Check for detectors in different locations
@@ -434,7 +435,7 @@ class StaticAnalyzer:
                     "severity": severity,
                     "impact": impact.title() if impact else "Unknown",
                     "confidence": confidence.title() if confidence else "Unknown",
-                    "recommendation": f"Review and fix {check.lower()} issue.",
+                    "recommendation": "",
                     "code_snippet": code_snippet,
                     "references": ["https://github.com/crytic/slither"],
                     "raw_detector": detector

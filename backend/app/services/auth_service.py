@@ -1,6 +1,6 @@
 from fastapi import HTTPException, status
-from datetime import datetime, timedelta
-from app.models.user import User, UserMode
+from datetime import datetime, timezone
+from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, Token, UserResponse
 from app.core.security import verify_password, get_password_hash, create_access_token
 from beanie import PydanticObjectId
@@ -27,8 +27,8 @@ class AuthService:
             full_name=user_data.full_name,
             hashed_password=hashed_password, 
             mode=user_data.user_mode,
-            created_at=datetime.now(datetime.timezone.utc)(),
-            updated_at=datetime.now(datetime.timezone.utc)(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             # is_active=True
         )
         
@@ -62,8 +62,8 @@ class AuthService:
         #     )
         
         # Cập nhật last_login
-        user.last_login = datetime.now(datetime.timezone.utc)()
-        # user.last_activity = datetime.now(datetime.timezone.utc)()
+        user.last_login = datetime.now(timezone.utc)
+        # user.last_activity = datetime.now(timezone.utc)
         await user.save()
         
         return user

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from beanie import Document
 from pydantic import EmailStr, Field
@@ -15,9 +15,9 @@ class User(Document):
     mode: UserMode = UserMode.NORMAL
     session_id: Optional[str] = None
     last_login: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
-    updated_at: datetime = Field(default_factory=datetime.now(datetime.timezone.utc))
-    
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
     class Settings:
         collection = "users"
         

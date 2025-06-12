@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 from app.models.analysis import Analysis, AnalysisStatus, AnalysisType
 from app.models.project import Project, ProjectType, ProjectStatus
 from app.services.static_analyzer import StaticAnalyzer, SlitherOptions
@@ -40,10 +40,6 @@ class AnalysisService:
             print(f"Report generation failed: {e}")
         
         return analysis
-
-    async def analyze_single_vulnerability(self, vulnerability: Dict, source_code: str) -> Dict:
-        """Analyze a single vulnerability in detail using AI"""
-        return await self.ai_analyzer.enhance_vulnerability_analysis(vulnerability, source_code)
     
     def get_supported_versions(self) -> list:
         """Get list of supported Solidity versions"""
@@ -82,7 +78,7 @@ class AnalysisService:
             user_id=project.user_id,
             analysis_type=AnalysisType.SLITHER,
             status=AnalysisStatus.RUNNING,
-            started_at=datetime.now(datetime.timezone.utc)()
+            started_at=datetime.now(timezone.utc)
         )
         await analysis.insert()
         
@@ -105,16 +101,9 @@ class AnalysisService:
             
             print(f"📁 Foundry project structure:")
             print(f"  - Source files: {len(project_structure['source_files'])}")
-            
-            # Use custom options or generate recommended ones
-            # if not slither_options:
-            #     slither_options = FileService.get_foundry_analysis_options(project_path)
-            #     print(f"📋 Using default Foundry options: {slither_options}")
-            
+
             # Run Foundry-specific analysis
-            slither_results = await self.static_analyzer.run_foundry_analysis(
-                project_path, slither_options
-            )
+            slither_results = await self.static_analyzer.run_foundry_analysis(project_path, slither_options)
             
             print(f"📊 Foundry Slither analysis result: success={slither_results.get('success')}")
             
@@ -131,7 +120,7 @@ class AnalysisService:
                 # Update analysis with error
                 analysis.status = AnalysisStatus.FAILED
                 analysis.error_message = detailed_error
-                analysis.completed_at = datetime.now(datetime.timezone.utc)()
+                analysis.completed_at = datetime.now(timezone.utc)
                 await analysis.save()
                 
                 # Update project status
@@ -147,11 +136,7 @@ class AnalysisService:
                 # Add Foundry-specific metadata
                 parsed_results["foundry_metadata"] = {
                     "project_structure": project_structure,
-                    "analysis_scope": {
-                        "target_files": slither_options.target_files if slither_options else [],
-                        "total_source_files": len(project_structure["source_files"]),
-                        "analyzed_files": len(slither_options.target_files) if slither_options and slither_options.target_files else len(project_structure["source_files"])
-                    }
+                    "total_source_files": len(project_structure["source_files"]),
                 }
                 
                 summary = parsed_results.get('summary', {})
@@ -177,7 +162,7 @@ class AnalysisService:
             analysis.slither_results = slither_results
             analysis.ai_analysis = parsed_results  # parsed static results
             analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.now(datetime.timezone.utc)()
+            analysis.completed_at = datetime.now(timezone.utc)
             await analysis.save()
             
             # Update project status
@@ -193,7 +178,7 @@ class AnalysisService:
             # Mark analysis as failed
             analysis.status = AnalysisStatus.FAILED
             analysis.error_message = str(e)
-            analysis.completed_at = datetime.now(datetime.timezone.utc)()
+            analysis.completed_at = datetime.now(timezone.utc)
             await analysis.save()
             
             # Update project status
@@ -215,7 +200,7 @@ class AnalysisService:
             user_id=project.user_id,
             analysis_type=AnalysisType.SLITHER,
             status=AnalysisStatus.RUNNING,
-            started_at=datetime.now(datetime.timezone.utc)()
+            started_at=datetime.now(timezone.utc)
         )
         await analysis.insert()
         
@@ -256,7 +241,7 @@ class AnalysisService:
                 
                 analysis.status = AnalysisStatus.FAILED
                 analysis.error_message = detailed_error
-                analysis.completed_at = datetime.now(datetime.timezone.utc)()
+                analysis.completed_at = datetime.now(timezone.utc)
                 await analysis.save()
                 
                 project.status = ProjectStatus.FAILED
@@ -285,7 +270,7 @@ class AnalysisService:
             analysis.slither_results = slither_results
             analysis.ai_analysis = parsed_results  # parsed static results
             analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.now(datetime.timezone.utc)()
+            analysis.completed_at = datetime.now(timezone.utc)
             await analysis.save()
             
             # Update project status
@@ -301,7 +286,7 @@ class AnalysisService:
             # Mark analysis as failed
             analysis.status = AnalysisStatus.FAILED
             analysis.error_message = str(e)
-            analysis.completed_at = datetime.now(datetime.timezone.utc)()
+            analysis.completed_at = datetime.now(timezone.utc)
             await analysis.save()
             
             # Update project status
@@ -321,7 +306,6 @@ class AnalysisService:
             raise Exception("No static analysis results found to enhance")
         
         try:
-            # Update status
             analysis.status = AnalysisStatus.RUNNING
             await analysis.save()
             
@@ -332,10 +316,8 @@ class AnalysisService:
             
             # Handle different project types
             if project.project_type == ProjectType.FOUNDRY_PROJECT:
-                # For Foundry projects, use specialized AI analysis
                 project_path = Path(project.analysis_path)
                 
-                # Get project structure
                 from app.services.file_service import FileService
                 project_structure = FileService.analyze_foundry_project_structure(project_path)
                 
@@ -347,41 +329,17 @@ class AnalysisService:
                         main_contracts.append(str(full_path))
                 
                 # Use Foundry-specific AI analysis
-                ai_analysis = await self.ai_analyzer.analyze_foundry_project(
-                    project_structure, 
+                ai_analysis = await self.ai_analyzer.analyze_foundry_project( 
                     analysis.slither_results, 
-                    main_contracts[:5],  # Limit to 5 files for token limits
+                    main_contracts[:5],  
+                    str(project.id)
                 )
             else:
                 # Single file analysis
                 source_code = await self._read_single_file_safely(project.file_path)
                 ai_analysis = await self.ai_analyzer.analyze_vulnerabilities(
-                    analysis.slither_results, source_code
+                    analysis.slither_results, source_code, str(project.id), project.original_filename
                 )
-
-            # # Handle different project types
-            # if project.project_type == ProjectType.FOUNDRY_PROJECT:
-            #     project_path = Path(project.analysis_path)
-            #     # actual_project_path = await self._get_foundry_analysis_path(project)
-            #     source_code = await self._read_foundry_source_safely(project.analysis_path)
-            # else:
-            #     source_code = await self._read_single_file_safely(project.file_path)
-            
-            # Run AI analysis with error handling
-            # try:
-            #     ai_analysis = await self.ai_analyzer.analyze_vulnerabilities(
-            #         analysis.slither_results, source_code
-            #     )
-            # except Exception as ai_error:
-            #     print(f"❌ AI analysis error: {ai_error}")
-            #     # Don't fail completely, just add error info
-            #     ai_analysis = {
-            #         "success": False,
-            #         "error": f"AI analysis failed: {str(ai_error)}",
-            #         "vulnerabilities": [],
-            #         "summary": {"total": 0, "high": 0, "medium": 0, "low": 0, "informational": 0},
-            #         "ai_recommendations": [f"AI analysis failed: {str(ai_error)}"]
-            #     }
 
             # Always proceed with results (even if AI failed)
             static_results = analysis.ai_analysis or {}
@@ -410,7 +368,7 @@ class AnalysisService:
             # Update analysis record
             analysis.ai_analysis = enhanced_analysis
             analysis.status = AnalysisStatus.COMPLETED
-            analysis.completed_at = datetime.now(datetime.timezone.utc)()
+            analysis.completed_at = datetime.now(timezone.utc)
             await analysis.save()
                 
             print("AI enhancement completed successfully")
@@ -423,7 +381,7 @@ class AnalysisService:
             # Mark analysis as failed
             analysis.status = AnalysisStatus.FAILED
             analysis.error_message = str(e)
-            analysis.completed_at = datetime.now(datetime.timezone.utc)()
+            analysis.completed_at = datetime.now(timezone.utc)
             await analysis.save()
             
             raise e
@@ -470,13 +428,11 @@ class AnalysisService:
             raise e
 
 # Utilities
-
+    
     async def _read_single_file_safely(self, file_path: str) -> str:
         """Safely read single file source code"""
         try:
             file_path_obj = Path(file_path)
-            
-            # Try multiple encodings
             encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']
             
             for encoding in encodings:
