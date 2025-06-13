@@ -275,6 +275,24 @@ class ProjectService {
     return response.json();
   }
 
+  static async resetModifications(analysisId, token) {
+    const response = await fetch(`/api/analysis/${analysisId}/reset-modifications`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Reset modifications error:', errorData);
+      throw new Error(errorData.detail || errorData.message || 'Failed to reset modifications');
+    }
+
+    return response.json();
+  }
+
   /* Report APIs */
   static async getStaticResults(analysisId, token) {
     const response = await fetch(`/api/analysis/${analysisId}/static-results`, {

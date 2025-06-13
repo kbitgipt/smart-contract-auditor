@@ -242,6 +242,33 @@ async def perform_ai_enhancement(
             detail=f"AI enhancement failed: {str(e)}"
         )
 
+@router.post("/project/{project_id}/query")
+async def query_project_context(
+    project_id: str,
+    question: str,
+    current_user: User = Depends(get_current_user_dependency)
+):
+    """Query project context using AI with vector store"""
+    project = await Project.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check ownership
+    if project.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    try:
+        analysis_service = AnalysisService()
+        result = await analysis_service.ai_analyzer.query_project_context(project_id, question)
+        
+        if result["success"]:
+            return {"response": result["response"]}
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
 class ReportGenerationRequest(BaseModel):
     """Request for report generation"""
     format_type: str = "html"  # html, json, markdown
@@ -405,24 +432,45 @@ async def modify_analysis_results(
         raise HTTPException(status_code=403, detail="Access denied")
     
     try:
-        # Update analysis data with auditor modifications
-        if analysis.ai_analysis:
-            analysis.ai_analysis.update(modified_data)
-        else:
-            analysis.ai_analysis = modified_data
+        # Validate modified data structure
+        if not _validate_modification_data(modified_data):
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid modification data structure"
+            )
         
-        # Add modification metadata
-        analysis.ai_analysis["auditor_modifications"] = {
-            "modified_by": str(current_user.id),
-            "modified_at": datetime.now(timezone.utc).isoformat(),
-            "modification_note": modified_data.get("modification_note", "")
-        }
+        # Create backup of original data
+        if not analysis.ai_analysis:
+            analysis.ai_analysis = {}
+        
+        # Store original parsed results as backup if not exists
+        if "original_parsed_results" not in analysis.ai_analysis:
+            static_analyzer = StaticAnalyzer()
+            original_parsed = static_analyzer.parse_slither_results(analysis.slither_results)
+            analysis.ai_analysis["original_parsed_results"] = original_parsed
+
+        # Update with modified data
+        analysis.ai_analysis.update({
+            "vulnerabilities": modified_data.get("vulnerabilities", []),
+            "summary": modified_data.get("summary", {}),
+            "modification_metadata": {
+                "modified_by": str(current_user.id),
+                "modified_at": datetime.now(timezone.utc).isoformat(),
+                "modification_note": modified_data.get("modification_note", ""),
+                "changes_summary": _generate_changes_summary(
+                    analysis.ai_analysis.get("original_parsed_results", {}),
+                    modified_data
+                )
+            },
+            "status": "modified_by_auditor"
+        })
         
         await analysis.save()
         
         return {
             "success": True,
             "message": "Analysis results modified successfully",
+            "changes_summary": analysis.ai_analysis["modification_metadata"]["changes_summary"],
             "modified_analysis": await _format_analysis_response(analysis)
         }
         
@@ -431,6 +479,103 @@ async def modify_analysis_results(
             status_code=500,
             detail=f"Failed to modify results: {str(e)}"
         )
+
+@router.post("/{analysis_id}/reset-modifications")
+async def reset_modifications(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user_dependency)
+):
+    """Reset modifications and restore original parsed results"""
+    
+    if current_user.mode != "auditor":
+        raise HTTPException(status_code=403, detail="Requires auditor mode")
+    
+    analysis = await Analysis.get(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    
+    if analysis.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    try:
+        if not analysis.ai_analysis or "original_parsed_results" not in analysis.ai_analysis:
+            # Re-parse from slither results
+            static_analyzer = StaticAnalyzer()
+            original_parsed = static_analyzer.parse_slither_results(analysis.slither_results)
+        else:
+            original_parsed = analysis.ai_analysis["original_parsed_results"]
+        
+        # Restore original data
+        analysis.ai_analysis.update({
+            "vulnerabilities": original_parsed.get("vulnerabilities", []),
+            "summary": original_parsed.get("summary", {}),
+            "status": "original_restored",
+            "restored_at": datetime.now(timezone.utc).isoformat()
+        })
+        
+        await analysis.save()
+        
+        return {
+            "success": True,
+            "message": "Original results restored successfully",
+            "restored_analysis": await _format_analysis_response(analysis)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reset modifications: {str(e)}"
+        )
+
+# Validate modification data structure
+def _validate_modification_data(data: Dict) -> bool:
+    """Validate modification data structure"""
+    required_fields = ["vulnerabilities", "summary"]
+    if not all(field in data for field in required_fields):
+        return False
+        
+    # Validate vulnerabilities structure
+    if not isinstance(data["vulnerabilities"], list):
+        return False
+        
+    for vuln in data["vulnerabilities"]:
+        if not isinstance(vuln, dict):
+            return False
+        required_vuln_fields = ["id", "title", "severity", "description"]
+        if not all(field in vuln for field in required_vuln_fields):
+            return False
+            
+    # Validate summary structure
+    summary = data["summary"]
+    if not isinstance(summary, dict):
+        return False
+    required_summary_fields = ["total", "high", "medium", "low", "informational"]
+    if not all(field in summary for field in required_summary_fields):
+        return False
+        
+    return True
+
+def _generate_changes_summary(original: Dict, modified: Dict) -> Dict:
+    """Generate summary of changes made"""
+    original_vulns = original.get("vulnerabilities", [])
+    modified_vulns = modified.get("vulnerabilities", [])
+    
+    original_ids = {v["id"] for v in original_vulns}
+    modified_ids = {v["id"] for v in modified_vulns}
+    
+    return {
+        "vulnerabilities_added": len(modified_ids - original_ids),
+        "vulnerabilities_removed": len(original_ids - modified_ids),
+        "vulnerabilities_modified": len([
+            v for v in modified_vulns 
+            if v["id"] in original_ids and v != next(
+                (ov for ov in original_vulns if ov["id"] == v["id"]), {}
+            )
+        ]),
+        "summary_changed": original.get("summary") != modified.get("summary"),
+        "total_original": len(original_vulns),
+        "total_modified": len(modified_vulns)
+    }
 
 @router.get("/{analysis_id}/report", response_class=HTMLResponse)
 async def get_analysis_report(

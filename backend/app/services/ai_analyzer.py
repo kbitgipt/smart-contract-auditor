@@ -104,8 +104,14 @@ class AIAnalyzer:
         """Upload multiple source files for Foundry project with .js extension"""
         uploaded_file_ids = []
         try:
-            # Get existing source files for this project
+            # Step 1: Find or create vector store for this project
+            vector_store_id = await self._find_existing_vector_store(project_id)
+            if not vector_store_id:
+                vector_store_id = await self._create_project_vector_store(project_id)
+            
+            # Step 2: Get existing source files for this project
             existing_source_files = await self._find_existing_source_files(project_id)
+            new_file_ids = []
 
             for contract_path in main_contracts:
                 contract_path_obj = Path(contract_path)
@@ -113,7 +119,7 @@ class AIAnalyzer:
                     original_filename = contract_path_obj.name
                     base_name = contract_path_obj.stem
                     expected_filename = f"{project_id}_{base_name}.js"
-                    
+                    temp_dir = None
                     # Check if file already exists
                     file_id_found = None
                     for file_id in existing_source_files:
@@ -151,19 +157,25 @@ class AIAnalyzer:
                                 purpose="assistants"
                             )
                         
-                    uploaded_file_ids.append(file_obj.id)
+                        uploaded_file_ids.append(file_obj.id)
+                        new_file_ids.append(file_obj.id)
 
                     # Clean up local temp file
-                    try:
-                        import shutil
-                        shutil.rmtree(temp_dir)
-                    except Exception as e:
-                        print(f"Error cleaning up temp directory: {e}")
-            
-            return uploaded_file_ids
+                    if temp_dir:
+                        try:
+                            import shutil
+                            shutil.rmtree(temp_dir)
+                        except Exception as e:
+                            print(f"Error cleaning up temp directory: {e}")
+
+            # Add this after uploading new_file_ids (nếu có)
+            if new_file_ids:
+                await self._add_files_to_vector_store(vector_store_id, new_file_ids)
+
+            return uploaded_file_ids, vector_store_id
             
         except Exception as e:
-                    print(f"Error uploading Foundry source files: {e}")
+                    print(f"Error uploading Foundry source files with vector store: {e}")
                     # Clean up any uploaded files on error
                     await self._cleanup_assistant_files(uploaded_file_ids)
                     raise e
@@ -331,7 +343,7 @@ Please provide a comprehensive security assessment by:
 Focus on practical security concerns that could impact the contract's operation or user funds.
 """,
                     attachments=[
-                        {"file_id": source_file_id, "tools": [{"type": "code_interpreter"}]},
+                        {"file_id": source_file_id, "tools": [{"type": "file_search"}]},
                         {"file_id": slither_file_id, "tools": [{"type": "file_search"}]}
                     ]
                 )
@@ -339,7 +351,7 @@ Focus on practical security concerns that could impact the contract's operation 
                 # Run the assistant
                 run = await self.openai_client.beta.threads.runs.create(
                     thread_id=thread.id,
-                    assistant_id=self.assistant_id
+                    assistant_id=self.assistant_id,
                 )
                 
                 # Wait for completion
@@ -386,6 +398,61 @@ Focus on practical security concerns that could impact the contract's operation 
                 "error": f"AI analysis failed: {str(e)}"
             }
 
+# Vector Store Management
+
+    async def _create_project_vector_store(self, project_id: str) -> str:
+        """Create a vector store for a specific project"""
+        try:
+            vector_store = await self.openai_client.vector_stores.create(
+                name=f"project_{project_id}_source_code"
+            )
+            print(f"✅ Created vector store: {vector_store.id} for project {project_id}")
+            return vector_store.id
+        except Exception as e:
+            print(f"Error creating vector store for project {project_id}: {e}")
+            raise e
+
+    async def _find_existing_vector_store(self, project_id: str) -> str:
+        """Find existing vector store for a project"""
+        try:
+            vector_stores = await self.openai_client.vector_stores.list()
+            
+            for vs in vector_stores.data:
+                if vs.name == f"project_{project_id}_source_code":
+                    print(f"✅ Found existing vector store: {vs.id} for project {project_id}")
+                    return vs.id
+            
+            return None
+        except Exception as e:
+            print(f"Error finding existing vector store for project {project_id}: {e}")
+            return None
+
+    async def _add_files_to_vector_store(self, vector_store_id: str, file_ids: List[str]) -> bool:
+        """Add files to vector store using batch upload"""
+        try:
+            if not file_ids:
+                return True
+                
+            # Create file batch
+            file_batch = await self.openai_client.vector_stores.file_batches.create_and_poll(
+                vector_store_id=vector_store_id,
+                file_ids=file_ids
+            )
+            
+            print(f"✅ Added {len(file_ids)} files to vector store {vector_store_id}")
+            return file_batch.status == "completed"
+        except Exception as e:
+            print(f"Error adding files to vector store {vector_store_id}: {e}")
+            return False
+
+    async def _cleanup_vector_store(self, vector_store_id: str):
+        """Delete vector store"""
+        try:
+            await self.openai_client.vector_stores.delete(vector_store_id)
+            print(f"✅ Deleted vector store: {vector_store_id}")
+        except Exception as e:
+            print(f"Error cleaning up vector store {vector_store_id}: {e}")
+
 # Analyze foundry project with assistant 
 
     async def analyze_foundry_project(self, slither_results: Dict, main_contracts: List[str], project_id: str) -> Dict:
@@ -397,23 +464,26 @@ Focus on practical security concerns that could impact the contract's operation 
                 print(f"🗑️ Cleaning up {len(old_slither_files)} old Slither files for project {project_id}")
                 await self._cleanup_assistant_files(old_slither_files)
             
-            # Step 2: Upload or reuse source files
-            source_file_ids = await self._upload_foundry_source_files(main_contracts, project_id)
-            
-            # Step 3: Upload fresh Slither results
-            temp_dir = Path(tempfile.mkdtemp())
-            slither_file_path = temp_dir / f"{project_id}_slither_results.json"
-            with open(slither_file_path, 'w', encoding='utf-8') as f:
-                json.dump(slither_results, f, indent=2)
-            
-            with open(slither_file_path, "rb") as f:
-                slither_file = await self.openai_client.files.create(
-                    file=f,
-                    purpose="assistants"
+            # Step 2: Upload or reuse source files with vector store
+            source_file_ids, vector_store_id = await self._upload_foundry_source_files(main_contracts, project_id)
+                        
+            # Step 3: Update assistant to use the vector store
+            try:
+                print(f"🔧 Updating assistant {self.assistant_id} to use vector store {vector_store_id}")
+                await self.openai_client.beta.assistants.update(
+                    assistant_id=self.assistant_id,
+                    tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}}
                 )
+                print(f"✅ Assistant updated with vector store {vector_store_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to update assistant with vector store: {e}")
+
+            # Step 4: Upload fresh Slither results
+            slither_file_id = await self._upload_slither_results(slither_results, project_id)
+
             
             try:
-                # Step 4: Create thread and run analysis using Assistant
+                # Step 5: Create thread and run analysis using Assistant with Vector Store
                 thread = await self.openai_client.beta.threads.create()
                 
                 # Create comprehensive analysis prompt
@@ -442,29 +512,35 @@ Please provide a comprehensive security assessment by:
 
 Note: All source files have .js extension for upload compatibility but contain Solidity smart contract code.
 Focus on practical security concerns that could impact the contracts' operation or user funds.
+
+Please respond with a JSON object containing:
+- vulnerabilities: array of vulnerability objects
+- summary: object with counts (total, high, medium, low, informational)
+- general_recommendations: array of strings
 """
                 
-                # Prepare file attachments
-                # all_file_ids = source_file_ids + [slither_file.id]
-                attachments=[
-                        {"file_id": source_file_ids, "tools": [{"type": "code_interpreter"}]},
-                        {"file_id": slither_file.id, "tools": [{"type": "file_search"}]}
-                    ]
-                # for file_id in all_file_ids:
-                #     attachments.append({
-                #         "file_id": file_id, 
-                #         "tools": [{"type": "code_interpreter"}]
-                #     })
-                
-                # Add message to thread
+                # Add message to thread with Slither file attachment
                 await self.openai_client.beta.threads.messages.create(
                     thread_id=thread.id,
                     role="user",
                     content=prompt,
-                    attachments=attachments
+                    attachments=[
+                        {"file_id": slither_file_id, "tools": [{"type": "file_search"}]},
+                    ]
                 )
                 
                 # Run the assistant
+                # run = await self.openai_client.beta.threads.runs.create(
+                #     thread_id=thread.id,
+                #     assistant_id=self.assistant_id,
+                #     tool_resources={
+                #         "file_search": {
+                #             "vector_store_ids": [vector_store_id]
+                #         }
+                #     }
+                # )
+
+                # Step 6: Run the assistant (vector store is now accessible through assistant)
                 run = await self.openai_client.beta.threads.runs.create(
                     thread_id=thread.id,
                     assistant_id=self.assistant_id
@@ -512,18 +588,16 @@ Focus on practical security concerns that could impact the contracts' operation 
                         "success": False,
                         "error": f"Assistant run failed with status: {run.status}"
                     }
-                
+            except Exception as e:
+                print(f"Assistant analysis error: {e}")
+                return {
+                    "success": False,
+                    "error": f"AI analysis failed: {str(e)}"
+                }  
             finally:
                 # Step 5: Clean up only Slither file (keep source files for reuse)
                 print(f"🗑️ Cleaning up temporary Slither file for project {project_id}")
-                await self._cleanup_assistant_files([slither_file.id])
-                
-                # Clean up local temp directory
-                try:
-                    import shutil
-                    shutil.rmtree(temp_dir)
-                except Exception as e:
-                    print(f"Error cleaning up temp directory: {e}")
+                await self._cleanup_assistant_files([slither_file_id])
                     
         except Exception as e:
             print(f"Foundry project analysis error: {e}")
@@ -532,3 +606,80 @@ Focus on practical security concerns that could impact the contracts' operation 
                 "error": f"Foundry analysis failed: {str(e)}"
             }
 
+# Query project context
+
+    async def query_project_context(self, project_id: str, question: str) -> Dict:
+        """Query project context using vector store for AI chat"""
+        try:
+            # Find vector store for project
+            vector_store_id = await self._find_existing_vector_store(project_id)
+            if not vector_store_id:
+                return {
+                    "success": False,
+                    "error": "No vector store found for this project"
+                }
+            
+            # Update assistant to use the vector store (if not already set)
+            try:
+                await self.openai_client.beta.assistants.update(
+                    assistant_id=self.assistant_id,
+                    tool_resources={"file_search": {"vector_store_ids": [vector_store_id]}}
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to update assistant for query: {e}")
+            
+            # Create thread for query
+            thread = await self.openai_client.beta.threads.create()
+            
+            # Add query message
+            await self.openai_client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=f"""
+Based on the source code in this project, please answer the following question:
+
+**Question:** {question}
+
+Please search through the project files to provide a comprehensive answer based on the actual code implementation.
+"""
+            )
+            
+            # Run with assistant (vector store accessible through assistant)
+            run = await self.openai_client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=self.assistant_id
+            )
+            
+            # Wait for completion
+            import asyncio
+            while run.status in ["queued", "in_progress"]:
+                await asyncio.sleep(1)
+                run = await self.openai_client.beta.threads.runs.retrieve(
+                    thread_id=thread.id,
+                    run_id=run.id
+                )
+            
+            if run.status == "completed":
+                messages = await self.openai_client.beta.threads.messages.list(
+                    thread_id=thread.id
+                )
+                
+                assistant_message = messages.data[0]
+                response_content = assistant_message.content[0].text.value
+                
+                return {
+                    "success": True,
+                    "response": response_content
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Query failed with status: {run.status}"
+                }
+                
+        except Exception as e:
+            print(f"Project context query error: {e}")
+            return {
+                "success": False,
+                "error": f"Query failed: {str(e)}"
+            }

@@ -2,6 +2,7 @@ import os, json, asyncio, re, shutil
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Dict, List, Optional
+from datetime import datetime, timezone
 
 class SlitherOptions(BaseModel):
     """Slither analysis options for auditors"""
@@ -438,13 +439,17 @@ class StaticAnalyzer:
                     "recommendation": "",
                     "code_snippet": code_snippet,
                     "references": ["https://github.com/crytic/slither"],
-                    "raw_detector": detector
+                    "raw_detector": detector,
+                    "editable": True,  # Thêm flag để frontend biết có thể edit
+                    "source": "slither"
                 })
             
             return {
                 "vulnerabilities": vulnerabilities,
                 "summary": summary,
-                "raw_findings": detectors
+                "raw_findings": detectors,
+                "parsed_at": datetime.now(timezone.utc).isoformat(),  # Thêm timestamp
+                "editable": True
             }
             
         except Exception as e:
